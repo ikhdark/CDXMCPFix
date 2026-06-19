@@ -1,0 +1,12 @@
+# Local dependencies
+node_modules/
+
+# Local Codex agent skill cache; publish only explicit repo docs/manifests.
+.agents/
+
+# Local-only agent instructions; do not publish to GitHub.
+AGENTS.md
+CLAUDE.md
+
+# Upstream reference material only; do not publish/vendor into CDXCore.
+codex-rust-v0.141.0/
