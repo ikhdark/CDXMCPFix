@@ -18,11 +18,19 @@ use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
 
 ## Quick Start
 
-1. Install and configure CDXCore for Codex with the Windows x64 one-command
-   installer:
+1. Install and configure CDXCore for Codex with the one-command installer for
+   your platform.
+
+   Windows x64:
 
    ```powershell
    irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 | iex
+   ```
+
+   macOS/Linux:
+
+   ```sh
+   curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh
    ```
 
 2. Verify that the command is available:
@@ -44,23 +52,37 @@ interactive terminal.
 
 ## Installing and Initialising CDXCore
 
-Install CDXCore with the one-command Windows x64 installer:
+Install CDXCore with the one-command installer for your platform.
+
+Windows x64:
 
 ```powershell
 irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 | iex
 ```
 
+macOS/Linux:
+
+```sh
+curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh
+```
+
 The installer downloads the current release ZIP, verifies `SHA256SUMS.txt`,
 installs `cdxcore.exe` to `%LOCALAPPDATA%\CDXCore\bin`, updates the user PATH,
-and runs `cdxcore setup codex`.
+and runs `cdxcore setup codex`. On macOS/Linux, the installer downloads the
+current release tarball, verifies `SHA256SUMS.txt`, installs `cdxcore` to
+`$HOME/.local/bin`, adds that directory to the current PATH and shell profile
+when needed, and runs `cdxcore setup codex`.
 
-Current prebuilt artifact:
+Current prebuilt artifacts:
 
-- Windows x64: `cdxcore-v0.1.1-x86_64-pc-windows-msvc.zip`
-- Installer: `install.ps1`
+- Windows x64: `cdxcore-v0.1.2-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxcore-v0.1.2-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Intel: `cdxcore-v0.1.2-x86_64-apple-darwin.tar.gz`
+- macOS Apple Silicon: `cdxcore-v0.1.2-aarch64-apple-darwin.tar.gz`
+- Installers: `install.ps1`, `install.sh`
 
-Manual ZIP install remains available from
-`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.1`.
+Manual archive install remains available from
+`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.2`.
 
 Upon completion, the command `cdxcore` should be available:
 
@@ -103,6 +125,12 @@ installer first and run it with `-EnableCommandGuard`:
 $installer = "$env:TEMP\install-cdxcore.ps1"
 irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 -OutFile $installer
 powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableCommandGuard
+```
+
+On macOS/Linux:
+
+```sh
+curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-command-guard
 ```
 
 ## Updating CDXCore

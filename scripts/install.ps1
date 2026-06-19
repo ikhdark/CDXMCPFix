@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]$Version = "v0.1.1",
+    [string]$Version = "v0.1.2",
     [string]$InstallDir = "",
     [switch]$SkipCodexSetup,
     [switch]$EnableCommandGuard,

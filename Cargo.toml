@@ -1,6 +1,6 @@
 [package]
 name = "cdxcore"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Read-only MCP startup and configuration diagnostics for Codex."
 license = "MIT"
@@ -17,6 +17,7 @@ include = [
     "/docs/**/*.md",
     "/docs/examples/**/*.json",
     "/schemas/**/*.json",
+    "/scripts/**/*.sh",
     "/scripts/**/*.ps1",
     "/src/**/*.rs",
     "/tests/**/*.rs",
