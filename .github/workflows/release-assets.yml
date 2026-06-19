@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to package, for example v0.1.4
+        description: Release tag to package, for example v0.1.5
         required: true
         type: string
 
@@ -48,6 +48,14 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
+
+      - name: Check Unix installer syntax
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n scripts/install.sh
+          bash -n scripts/install.sh
 
       - name: Test
         run: cargo test --locked
@@ -130,6 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           sh -n scripts/install.sh
+          bash -n scripts/install.sh
           cp scripts/install.ps1 dist/install.ps1
           cp scripts/install.sh dist/install.sh
           chmod 0755 dist/install.sh

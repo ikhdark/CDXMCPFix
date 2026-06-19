@@ -1,11 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${CDXCORE_VERSION:-v0.1.4}"
+VERSION="${CDXCORE_VERSION:-v0.1.5}"
 INSTALL_DIR="${CDXCORE_INSTALL_DIR:-}"
 SKIP_CODEX_SETUP="${CDXCORE_SKIP_CODEX_SETUP:-0}"
-ENABLE_COMMAND_GUARD="${CDXCORE_ENABLE_COMMAND_GUARD:-0}"
-ENABLE_RETRY_LEDGER="${CDXCORE_ENABLE_RETRY_LEDGER:-0}"
 NO_PATH_UPDATE="${CDXCORE_NO_PATH_UPDATE:-0}"
 
 while [ "$#" -gt 0 ]; do
@@ -24,14 +22,6 @@ while [ "$#" -gt 0 ]; do
             SKIP_CODEX_SETUP=1
             shift
             ;;
-        --enable-command-guard)
-            ENABLE_COMMAND_GUARD=1
-            shift
-            ;;
-        --enable-retry-ledger)
-            ENABLE_RETRY_LEDGER=1
-            shift
-            ;;
         --no-path-update)
             NO_PATH_UPDATE=1
             shift
@@ -43,6 +33,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+
 if [ -z "$INSTALL_DIR" ]; then
     if [ -z "${HOME:-}" ]; then
         echo "HOME is not set; pass --install-dir." >&2
@@ -50,6 +41,37 @@ if [ -z "$INSTALL_DIR" ]; then
     fi
     INSTALL_DIR="$HOME/.local/bin"
 fi
+
+normalize_install_dir() {
+    raw_dir="$1"
+    case "$raw_dir" in
+        ""|"/"|"/."|"//"|"///")
+            echo "install directory must not be a filesystem root" >&2
+            exit 2
+            ;;
+    esac
+
+    parent_dir="$(dirname "$raw_dir")"
+    leaf_dir="$(basename "$raw_dir")"
+    case "$leaf_dir" in
+        ""|"."|".."|"/")
+            echo "install directory must resolve to a named directory, not a filesystem root" >&2
+            exit 2
+            ;;
+    esac
+
+    mkdir -p "$parent_dir"
+    parent_dir="$(cd "$parent_dir" && pwd -P)"
+    INSTALL_DIR="$parent_dir/$leaf_dir"
+}
+
+normalize_install_dir "$INSTALL_DIR"
+case "$INSTALL_DIR" in
+    ""|"/"|"/."|"//"|"///")
+        echo "install directory must not be a filesystem root" >&2
+        exit 2
+        ;;
+esac
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -184,18 +206,8 @@ esac
 "$INSTALL_DIR/cdxcore" --version
 
 if [ "$SKIP_CODEX_SETUP" != "1" ]; then
-    if [ "$ENABLE_COMMAND_GUARD" = "1" ] || [ "$ENABLE_RETRY_LEDGER" = "1" ]; then
-        setup_args="--enable-command-guard"
-        if [ "$ENABLE_RETRY_LEDGER" = "1" ]; then
-            setup_args="$setup_args --enable-retry-ledger"
-        fi
-        if ! "$INSTALL_DIR/cdxcore" setup codex $setup_args; then
-            echo "Warning: CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH." >&2
-        fi
-    else
-        if ! "$INSTALL_DIR/cdxcore" setup codex; then
-            echo "Warning: CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH." >&2
-        fi
+    if ! "$INSTALL_DIR/cdxcore" setup codex; then
+        echo "Warning: CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH." >&2
     fi
 fi
 

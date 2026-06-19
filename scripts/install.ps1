@@ -1,15 +1,14 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]$Version = "v0.1.4",
+    [string]$Version = "v0.1.5",
     [string]$InstallDir = "",
     [switch]$SkipCodexSetup,
-    [switch]$EnableCommandGuard,
-    [switch]$EnableRetryLedger,
     [switch]$NoPathUpdate
 )
 
 $ErrorActionPreference = "Stop"
+
 
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $localAppData = $env:LOCALAPPDATA
@@ -20,6 +19,11 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 }
 
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
+$installRoot = [IO.Path]::GetPathRoot($InstallDir)
+if ([string]::Equals($InstallDir.TrimEnd('\', '/'), $installRoot.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+    throw "InstallDir must not be a filesystem root."
+}
+
 $repo = "ikhdark/CDXCore"
 $target = "x86_64-pc-windows-msvc"
 $assetName = "cdxcore-$Version-$target.zip"
@@ -139,14 +143,7 @@ try {
     & $exe --version
 
     if (-not $SkipCodexSetup) {
-        $setupArgs = @("setup", "codex")
-        if ($EnableCommandGuard -or $EnableRetryLedger) {
-            $setupArgs += "--enable-command-guard"
-        }
-        if ($EnableRetryLedger) {
-            $setupArgs += "--enable-retry-ledger"
-        }
-        & $exe @setupArgs
+        & $exe setup codex
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH."
         }

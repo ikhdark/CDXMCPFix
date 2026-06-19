@@ -1,7 +1,4 @@
-use serde_json::Value as JsonValue;
 use std::env;
-use std::fs;
-use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -18,68 +15,27 @@ fn cdxcore_command(args: &[&str]) -> Command {
 }
 
 #[test]
-fn top_level_help_mentions_setup_and_optional_command_guard() {
+fn top_level_help_mentions_setup_and_mcp_server() {
     let stdout = cdxcore_output(&["--help"]);
 
     assert!(stdout.contains("setup"));
-    assert!(stdout.contains("guard-hook"));
-    assert!(stdout.contains("Optional command guard"));
-    assert!(stdout.contains("--enable-command-guard"));
+    assert!(stdout.contains("mcp-server"));
+    assert!(!stdout.contains("guard-hook"));
 }
 
 #[test]
-fn guard_hook_help_marks_hooks_optional_and_feedback_only() {
-    let stdout = cdxcore_output(&["guard-hook", "--help"]);
-
-    assert!(stdout.contains("optional"));
-    assert!(stdout.contains("feedback-only"));
-    assert!(stdout.contains("pre-tool-use"));
-    assert!(stdout.contains("post-tool-use"));
-}
-
-#[test]
-fn setup_codex_help_mentions_mcp_default_and_guard_opt_in() {
+fn setup_codex_help_mentions_mcp_default_only() {
     let stdout = cdxcore_output(&["setup", "codex", "--help"]);
 
-    assert!(stdout.contains("cdxcore serve"));
-    assert!(stdout.contains("--enable-command-guard"));
-    assert!(stdout.contains("--enable-retry-ledger"));
+    assert!(stdout.contains("cdxcore mcp-server"));
     assert!(stdout.contains("Default setup installs only the CDXCore MCP server"));
-    assert!(stdout.contains("feedback-only PreToolUse command guard hook"));
+    assert!(!stdout.contains("--enable-command-guard"));
+    assert!(!stdout.contains("--enable-retry-ledger"));
+    assert!(!stdout.contains("--enable-command-repair"));
 }
 
 #[test]
-fn setup_codex_enable_command_guard_writes_isolated_pre_tool_use_hook() {
-    let (command, pre_hook) = run_setup_codex(&["setup", "codex", "--enable-command-guard"]);
-    assert!(command.status.success());
-    assert_eq!(
-        pre_hook.get("command").and_then(JsonValue::as_str),
-        Some("cdxcore guard-hook pre-tool-use")
-    );
-    assert_eq!(pre_hook.get("timeout").and_then(JsonValue::as_u64), Some(3));
-    assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("hooks")
-        .join("hooks.json")
-        .exists());
-}
-
-#[test]
-fn setup_codex_enable_retry_ledger_writes_pre_tool_use_ledger_hook() {
-    let (command, pre_hook) = run_setup_codex(&[
-        "setup",
-        "codex",
-        "--enable-command-guard",
-        "--enable-retry-ledger",
-    ]);
-    assert!(command.status.success());
-    assert_eq!(
-        pre_hook.get("command").and_then(JsonValue::as_str),
-        Some("cdxcore guard-hook pre-tool-use --ledger")
-    );
-    assert_eq!(pre_hook.get("timeout").and_then(JsonValue::as_u64), Some(3));
-}
-
-fn run_setup_codex(args: &[&str]) -> (std::process::Output, JsonValue) {
+fn setup_codex_configures_mcp_server_without_hooks() {
     let fake_bin = tempdir().unwrap();
     let codex_home = tempdir().unwrap();
     write_fake_codex(fake_bin.path());
@@ -90,7 +46,7 @@ fn run_setup_codex(args: &[&str]) -> (std::process::Output, JsonValue) {
     }
     let joined_path = env::join_paths(paths).unwrap();
 
-    let output = cdxcore_command(args)
+    let output = cdxcore_command(&["setup", "codex"])
         .env("CODEX_HOME", codex_home.path())
         .env("PATH", joined_path)
         .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
@@ -102,38 +58,24 @@ fn run_setup_codex(args: &[&str]) -> (std::process::Output, JsonValue) {
         "setup failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let hooks_path = codex_home.path().join("hooks.json");
-    let text = fs::read_to_string(&hooks_path).expect("hooks.json written");
-    let value: JsonValue = serde_json::from_str(&text).expect("valid hooks json");
-    let hooks = value.get("hooks").and_then(JsonValue::as_object).unwrap();
-    assert!(hooks.get("PostToolUse").is_none());
-
-    let pre_hook = hooks
-        .get("PreToolUse")
-        .and_then(JsonValue::as_array)
-        .and_then(|groups| groups.first())
-        .and_then(|group| group.get("hooks"))
-        .and_then(JsonValue::as_array)
-        .and_then(|handlers| handlers.first())
-        .unwrap()
-        .clone();
-    (output, pre_hook)
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Configured Codex MCP server `cdxcore`"));
+    assert!(!codex_home.path().join("hooks.json").exists());
 }
 
 #[cfg(windows)]
-fn write_fake_codex(dir: &Path) {
+fn write_fake_codex(dir: &std::path::Path) {
     let cmd = env::var_os("COMSPEC").unwrap_or_else(|| "C:\\Windows\\System32\\cmd.exe".into());
-    fs::copy(cmd, dir.join("codex.exe")).unwrap();
+    std::fs::copy(cmd, dir.join("codex.exe")).unwrap();
 }
 
 #[cfg(unix)]
-fn write_fake_codex(dir: &Path) {
+fn write_fake_codex(dir: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
 
     let path = dir.join("codex");
-    fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).unwrap();
+    std::fs::set_permissions(path, permissions).unwrap();
 }

@@ -6,27 +6,23 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Write as _};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::time::Instant;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::time::{timeout, Duration};
 
 pub const SCHEMA_VERSION: &str = "cdxcore.diagnostics.v1";
+const EXIT_SUCCESSFULLY_WORKING: i32 = 0;
+const EXIT_WORKING_NEEDS_REVIEW: i32 = 1;
+const EXIT_COMPLETELY_UNWIRED: i32 = 2;
 const INIT_TIMEOUT: Duration = Duration::from_millis(3_000);
 const TOOLS_TIMEOUT: Duration = Duration::from_millis(3_000);
 const MAX_TOOL_PAGES: usize = 8;
-const GUARD_CONTEXT_CHAR_LIMIT: usize = 1_200;
-const GUARD_STDIN_BYTE_LIMIT: usize = 128 * 1024;
 const MCP_STDIN_LINE_BYTE_LIMIT: usize = 128 * 1024;
 const PROFILE_OUTPUT_LINE_BYTE_LIMIT: usize = 64 * 1024;
-const GUARD_LEDGER_SCHEMA_VERSION: u8 = 1;
-const GUARD_LEDGER_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
-const GUARD_LEDGER_MAX_BYTES: u64 = 256 * 1024;
-const GUARD_LEDGER_MAX_LINE_BYTES: usize = 8 * 1024;
-const GUARD_LEDGER_KEY_BYTES: usize = 32;
 const SECRET_TERMS: &[&str] = &[
     "token",
     "key",
@@ -45,8 +41,7 @@ const SECRET_TERMS: &[&str] = &[
 #[command(
     name = "cdxcore",
     version,
-    about = "Read-only MCP diagnostics for Codex",
-    after_help = "Optional command guard: install with `cdxcore setup codex --enable-command-guard`; inactive by default."
+    about = "Codex MCP diagnostics and startup profiler"
 )]
 pub struct Cli {
     #[arg(
@@ -61,61 +56,56 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum CliCommand {
+    #[command(
+        name = "scan",
+        alias = "inspect-config",
+        about = "Inspect Codex MCP config without launching servers"
+    )]
+    InspectConfig,
+    #[command(
+        name = "doctor",
+        alias = "profile",
+        about = "Profile all configured stdio MCP servers and report health"
+    )]
+    Profile,
+    #[command(
+        name = "explain",
+        alias = "diagnose-runtime",
+        about = "Explain static diagnostics for one server without launching it"
+    )]
+    DiagnoseRuntime { server: String },
+    #[command(
+        name = "fixes",
+        alias = "suggest-fixes",
+        about = "Show likely config and runtime fixes"
+    )]
+    SuggestFixes,
+    #[command(
+        name = "check",
+        alias = "validate",
+        about = "Profile one configured stdio MCP server by name"
+    )]
+    Validate { server: String },
+    #[command(
+        name = "mcp-server",
+        alias = "serve",
+        about = "Run the MCP server entrypoint used by Codex"
+    )]
+    Serve,
     #[command(about = "Configure CDXCore for an MCP client")]
     Setup {
         #[command(subcommand)]
         command: SetupCommand,
-    },
-    InspectConfig,
-    Profile,
-    Validate {
-        server: String,
-    },
-    DiagnoseRuntime {
-        server: String,
-    },
-    SuggestFixes,
-    Serve,
-    #[command(about = "Run optional feedback-only Codex command guard hooks")]
-    GuardHook {
-        #[command(subcommand)]
-        command: GuardHookCommand,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum SetupCommand {
     #[command(
-        about = "Configure Codex to launch `cdxcore serve`",
-        after_help = "Default setup installs only the CDXCore MCP server. Add `--enable-command-guard` to opt into the feedback-only PreToolUse command guard hook."
+        about = "Configure Codex to launch `cdxcore mcp-server`",
+        after_help = "Default setup installs only the CDXCore MCP server."
     )]
-    Codex {
-        #[arg(
-            long,
-            help = "Opt into the feedback-only PreToolUse command guard hook after installing the MCP server"
-        )]
-        enable_command_guard: bool,
-        #[arg(
-            long,
-            requires = "enable_command_guard",
-            help = "Install the command guard hook with the explicit v2b retry-shape ledger opt-in"
-        )]
-        enable_retry_ledger: bool,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum GuardHookCommand {
-    #[command(about = "Run the optional feedback-only PreToolUse command guard")]
-    PreToolUse {
-        #[arg(
-            long,
-            help = "Enable the explicit opt-in v2b repeated risky shape ledger"
-        )]
-        ledger: bool,
-    },
-    #[command(about = "Run the reserved feedback-only PostToolUse command guard")]
-    PostToolUse,
+    Codex,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -314,7 +304,6 @@ pub async fn run_cli(cli: Cli) -> Result<i32> {
             run_mcp_stdio_server().await?;
             Ok(0)
         }
-        CliCommand::GuardHook { command } => Ok(run_guard_hook(command).await),
         CliCommand::InspectConfig => {
             let envelope = build_diagnostics(RunMode::StaticAll).await?;
             write_output(&envelope, cli.json)?;
@@ -345,49 +334,21 @@ pub async fn run_cli(cli: Cli) -> Result<i32> {
 
 async fn run_setup(command: SetupCommand) -> Result<i32> {
     match command {
-        SetupCommand::Codex {
-            enable_command_guard,
-            enable_retry_ledger,
-        } => run_setup_codex(enable_command_guard, enable_retry_ledger).await,
+        SetupCommand::Codex => run_setup_codex().await,
     }
 }
 
-async fn run_setup_codex(enable_command_guard: bool, enable_retry_ledger: bool) -> Result<i32> {
+async fn run_setup_codex() -> Result<i32> {
     match run_codex_mcp_add().await {
         Ok(()) => {
             println!("Configured Codex MCP server `cdxcore`.");
-            println!("Codex will launch: cdxcore serve");
+            println!("Codex will launch: cdxcore mcp-server");
         }
         Err(err) => {
-            eprintln!("Could not run `codex mcp add cdxcore -- cdxcore serve`: {err}");
+            eprintln!("Could not run `codex mcp add cdxcore -- cdxcore mcp-server`: {err}");
             print_codex_manual_mcp_fallback();
             return Ok(1);
         }
-    }
-
-    if enable_command_guard {
-        let hooks_path = codex_user_hooks_path();
-        let changed = install_command_guard_hooks(&hooks_path, enable_retry_ledger)?;
-        if changed {
-            println!(
-                "Enabled optional CDXCore PreToolUse command guard hook at {}.",
-                display_path(&hooks_path)
-            );
-        } else {
-            println!(
-                "Optional CDXCore PreToolUse command guard hook was already present at {}.",
-                display_path(&hooks_path)
-            );
-        }
-        if enable_retry_ledger {
-            println!(
-                "The command guard is feedback-only; the retry-shape ledger is explicitly enabled."
-            );
-        } else {
-            println!("The command guard is feedback-only; it does not block or rewrite commands.");
-        }
-    } else {
-        print_command_guard_opt_in_hint();
     }
 
     Ok(0)
@@ -395,7 +356,7 @@ async fn run_setup_codex(enable_command_guard: bool, enable_retry_ledger: bool) 
 
 async fn run_codex_mcp_add() -> Result<()> {
     let output = Command::new("codex")
-        .args(["mcp", "add", "cdxcore", "--", "cdxcore", "serve"])
+        .args(["mcp", "add", "cdxcore", "--", "cdxcore", "mcp-server"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -415,18 +376,12 @@ async fn run_codex_mcp_add() -> Result<()> {
     }
 }
 
-fn print_command_guard_opt_in_hint() {
-    println!("Optional: CDXCore command guard is available.");
-    println!("Enable it with:");
-    println!("  cdxcore setup codex --enable-command-guard");
-}
-
 fn print_codex_manual_mcp_fallback() {
     eprintln!("Manual fallback: add this to ~/.codex/config.toml or $CODEX_HOME/config.toml:");
     eprintln!("[mcp_servers.cdxcore]");
     eprintln!("startup_timeout_sec = 15");
     eprintln!("command = \"cdxcore\"");
-    eprintln!("args = [\"serve\"]");
+    eprintln!("args = [\"mcp-server\"]");
 }
 
 fn codex_home_path() -> PathBuf {
@@ -438,815 +393,6 @@ fn codex_home_path_from_env(codex_home: Option<OsString>, home: Option<PathBuf>)
         .map(PathBuf::from)
         .or_else(|| home.map(|home| home.join(".codex")))
         .unwrap_or_else(|| PathBuf::from(".codex"))
-}
-
-fn codex_user_hooks_path() -> PathBuf {
-    codex_home_path().join("hooks.json")
-}
-
-fn install_command_guard_hooks(path: &Path, enable_retry_ledger: bool) -> Result<bool> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", display_path(parent)))?;
-    }
-
-    let mut root = if path.exists() {
-        let text =
-            fs::read_to_string(path).with_context(|| format!("read {}", display_path(path)))?;
-        if text.trim().is_empty() {
-            json!({ "hooks": {} })
-        } else {
-            serde_json::from_str(&text).with_context(|| format!("parse {}", display_path(path)))?
-        }
-    } else {
-        json!({ "hooks": {} })
-    };
-
-    let hooks = root
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("{} must contain a JSON object", display_path(path)))?
-        .entry("hooks")
-        .or_insert_with(|| json!({}));
-    let hooks = hooks
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("{}.hooks must contain a JSON object", display_path(path)))?;
-
-    let mut changed = false;
-    let command = if enable_retry_ledger {
-        "cdxcore guard-hook pre-tool-use --ledger"
-    } else {
-        "cdxcore guard-hook pre-tool-use"
-    };
-    changed |= ensure_command_guard_hook(hooks, "PreToolUse", command, "CDXCore command guard")?;
-
-    if changed {
-        let mut text = serde_json::to_string_pretty(&root)?;
-        text.push('\n');
-        fs::write(path, text).with_context(|| format!("write {}", display_path(path)))?;
-    }
-
-    Ok(changed)
-}
-
-fn ensure_command_guard_hook(
-    hooks: &mut serde_json::Map<String, JsonValue>,
-    event: &str,
-    command: &str,
-    status_message: &str,
-) -> Result<bool> {
-    let event_value = hooks
-        .entry(event.to_string())
-        .or_insert_with(|| JsonValue::Array(Vec::new()));
-    let event_groups = event_value
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("hooks.{event} must contain an array"))?;
-
-    if let Some(changed) =
-        reconcile_existing_command_guard_hook(event_groups, command, status_message)
-    {
-        return Ok(changed);
-    }
-
-    event_groups.push(json!({
-        "matcher": "^Bash$",
-        "hooks": [{
-            "type": "command",
-            "command": command,
-            "timeout": 3,
-            "statusMessage": status_message
-        }]
-    }));
-    Ok(true)
-}
-
-fn reconcile_existing_command_guard_hook(
-    event_groups: &mut Vec<JsonValue>,
-    desired_command: &str,
-    status_message: &str,
-) -> Option<bool> {
-    const MANAGED_COMMANDS: [&str; 2] = [
-        "cdxcore guard-hook pre-tool-use",
-        "cdxcore guard-hook pre-tool-use --ledger",
-    ];
-
-    let mut found = false;
-    let mut changed = false;
-    let mut group_idx = 0usize;
-    while group_idx < event_groups.len() {
-        let Some(group_object) = event_groups[group_idx].as_object_mut() else {
-            group_idx += 1;
-            continue;
-        };
-        let mut group_has_managed = false;
-        let mut group_has_other_handlers = false;
-        {
-            let Some(handlers) = group_object
-                .get_mut("hooks")
-                .and_then(JsonValue::as_array_mut)
-            else {
-                continue;
-            };
-            let mut idx = 0usize;
-            while idx < handlers.len() {
-                let is_managed = handlers[idx].get("type").and_then(JsonValue::as_str)
-                    == Some("command")
-                    && handlers[idx]
-                        .get("command")
-                        .and_then(JsonValue::as_str)
-                        .is_some_and(|command| MANAGED_COMMANDS.contains(&command));
-
-                if !is_managed {
-                    group_has_other_handlers = true;
-                    idx += 1;
-                    continue;
-                }
-
-                group_has_managed = true;
-                if group_has_other_handlers
-                    || handlers.iter().enumerate().any(|(other_idx, handler)| {
-                        other_idx != idx
-                            && !(handler.get("type").and_then(JsonValue::as_str) == Some("command")
-                                && handler
-                                    .get("command")
-                                    .and_then(JsonValue::as_str)
-                                    .is_some_and(|command| MANAGED_COMMANDS.contains(&command)))
-                    })
-                {
-                    handlers.remove(idx);
-                    changed = true;
-                    continue;
-                }
-
-                if found {
-                    handlers.remove(idx);
-                    changed = true;
-                    continue;
-                }
-
-                found = true;
-                changed |= set_hook_handler_field(&mut handlers[idx], "command", desired_command);
-                changed |=
-                    set_hook_handler_field(&mut handlers[idx], "statusMessage", status_message);
-                changed |= set_hook_handler_u64_field(&mut handlers[idx], "timeout", 3);
-                idx += 1;
-            }
-        }
-        if group_has_managed
-            && !group_has_other_handlers
-            && group_object.get("matcher").and_then(JsonValue::as_str) != Some("^Bash$")
-        {
-            group_object.insert(
-                "matcher".to_string(),
-                JsonValue::String("^Bash$".to_string()),
-            );
-            changed = true;
-        }
-        if group_object
-            .get("hooks")
-            .and_then(JsonValue::as_array)
-            .is_some_and(Vec::is_empty)
-        {
-            event_groups.remove(group_idx);
-            changed = true;
-        } else {
-            group_idx += 1;
-        }
-    }
-
-    found.then_some(changed)
-}
-
-fn set_hook_handler_field(handler: &mut JsonValue, key: &str, value: &str) -> bool {
-    let object = match handler.as_object_mut() {
-        Some(object) => object,
-        None => return false,
-    };
-    if object.get(key).and_then(JsonValue::as_str) == Some(value) {
-        false
-    } else {
-        object.insert(key.to_string(), JsonValue::String(value.to_string()));
-        true
-    }
-}
-
-fn set_hook_handler_u64_field(handler: &mut JsonValue, key: &str, value: u64) -> bool {
-    let object = match handler.as_object_mut() {
-        Some(object) => object,
-        None => return false,
-    };
-    if object.get(key).and_then(JsonValue::as_u64) == Some(value) {
-        false
-    } else {
-        object.insert(key.to_string(), JsonValue::Number(value.into()));
-        true
-    }
-}
-
-#[cfg(test)]
-fn hook_group_contains_command(group: &JsonValue, command: &str) -> bool {
-    group
-        .get("hooks")
-        .and_then(JsonValue::as_array)
-        .is_some_and(|handlers| {
-            handlers.iter().any(|handler| {
-                handler.get("type").and_then(JsonValue::as_str) == Some("command")
-                    && handler.get("command").and_then(JsonValue::as_str) == Some(command)
-            })
-        })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum GuardHookEvent {
-    PreToolUse,
-    PostToolUse,
-}
-
-impl GuardHookEvent {
-    fn as_str(self) -> &'static str {
-        match self {
-            GuardHookEvent::PreToolUse => "PreToolUse",
-            GuardHookEvent::PostToolUse => "PostToolUse",
-        }
-    }
-}
-
-async fn run_guard_hook(command: GuardHookCommand) -> i32 {
-    let (event, ledger_requested) = match command {
-        GuardHookCommand::PreToolUse { ledger } => (GuardHookEvent::PreToolUse, ledger),
-        GuardHookCommand::PostToolUse => (GuardHookEvent::PostToolUse, false),
-    };
-    let mut bytes = Vec::new();
-    let mut stdin = tokio::io::stdin().take((GUARD_STDIN_BYTE_LIMIT + 1) as u64);
-    if stdin.read_to_end(&mut bytes).await.is_err() || bytes.len() > GUARD_STDIN_BYTE_LIMIT {
-        return 0;
-    }
-    let Ok(input) = String::from_utf8(bytes) else {
-        return 0;
-    };
-    if let Some(output) = guard_hook_output_with_ledger(event, &input, ledger_requested) {
-        let mut stdout = tokio::io::stdout();
-        let _ = stdout.write_all(output.as_bytes()).await;
-        let _ = stdout.write_all(b"\n").await;
-        let _ = stdout.flush().await;
-    }
-    0
-}
-
-#[cfg(test)]
-fn guard_hook_output(event: GuardHookEvent, input: &str) -> Option<String> {
-    guard_hook_output_with_ledger(event, input, false)
-}
-
-fn guard_hook_output_with_ledger(
-    event: GuardHookEvent,
-    input: &str,
-    ledger_requested: bool,
-) -> Option<String> {
-    let context = guard_hook_context_with_ledger(event, input, ledger_requested)?;
-    Some(
-        json!({
-            "hookSpecificOutput": {
-                "hookEventName": event.as_str(),
-                "additionalContext": context
-            }
-        })
-        .to_string(),
-    )
-}
-
-#[cfg(test)]
-fn guard_hook_context(event: GuardHookEvent, input: &str) -> Option<String> {
-    guard_hook_context_with_ledger(event, input, false)
-}
-
-fn guard_hook_context_with_ledger(
-    event: GuardHookEvent,
-    input: &str,
-    ledger_requested: bool,
-) -> Option<String> {
-    let value: JsonValue = serde_json::from_str(input).ok()?;
-    let object = value.as_object()?;
-    if let Some(input_event) = object
-        .get("hook_event_name")
-        .or_else(|| object.get("hookEventName"))
-        .and_then(JsonValue::as_str)
-    {
-        if input_event != event.as_str() {
-            return None;
-        }
-    }
-    if object.get("tool_name").and_then(JsonValue::as_str) != Some("Bash") {
-        return None;
-    }
-    let command = object
-        .get("tool_input")
-        .and_then(|tool_input| tool_input.get("command"))
-        .and_then(JsonValue::as_str)?;
-    let cwd = object.get("cwd").and_then(JsonValue::as_str);
-
-    let feedback = guard_feedback_for_command(event, command);
-    if feedback.is_empty() {
-        return None;
-    }
-
-    let mut messages = feedback.iter().map(|item| item.message).collect::<Vec<_>>();
-    if event == GuardHookEvent::PreToolUse && guard_ledger_enabled(ledger_requested) {
-        if let Some(ledger_feedback) = guard_ledger_feedback(command, cwd, &feedback) {
-            messages.push(ledger_feedback);
-        }
-    }
-    sanitize_guard_context(&messages.join("\n"))
-}
-
-#[derive(Clone, Debug)]
-struct GuardFeedback {
-    rule_id: &'static str,
-    shape: &'static str,
-    message: &'static str,
-}
-
-fn guard_feedback_for_command(event: GuardHookEvent, command: &str) -> Vec<GuardFeedback> {
-    if event != GuardHookEvent::PreToolUse {
-        return Vec::new();
-    }
-
-    let mut feedback = Vec::new();
-    if looks_like_platform_mismatch(command) {
-        feedback.push(GuardFeedback {
-            rule_id: "platform.shell_mismatch",
-            shape: "platform.shell_mismatch",
-            message: "CDXCore: command syntax appears to target a different shell/platform than this session.",
-        });
-    }
-    if has_unquoted_windows_path_with_spaces(command) {
-        feedback.push(GuardFeedback {
-            rule_id: "quoting.windows_path_spaces",
-            shape: "quoting.windows_path_spaces",
-            message:
-                "CDXCore: quote Windows paths that contain spaces before running this command.",
-        });
-    }
-    if has_risky_validation_semicolon(command) {
-        feedback.push(GuardFeedback {
-            rule_id: "chaining.validation_semicolon",
-            shape: "chaining.validation_semicolon",
-            message: "CDXCore: a validation/build/test command is followed by another command with ';'; use an explicit success gate if the second command depends on the first.",
-        });
-    }
-    if has_failure_hiding_pipeline(command) {
-        feedback.push(GuardFeedback {
-            rule_id: "pipeline.validation_filter",
-            shape: "pipeline.validation_filter",
-            message: "CDXCore: this validation/build/test pipeline may hide the original command failure; preserve or inspect the upstream exit status.",
-        });
-    }
-    if has_suspicious_single_ampersand(command) {
-        feedback.push(GuardFeedback {
-            rule_id: "chaining.windows_single_ampersand",
-            shape: "chaining.windows_single_ampersand",
-            message: "CDXCore: single '&' can act as a command separator on Windows; use explicit success handling if commands depend on each other.",
-        });
-    }
-    feedback.extend(destructive_feedback_for_command(command));
-    feedback
-}
-
-fn sanitize_guard_context(context: &str) -> Option<String> {
-    let redacted = redact_text(context, &[]);
-    let capped: String = redacted.chars().take(GUARD_CONTEXT_CHAR_LIMIT).collect();
-    let final_redacted = redact_text(&capped, &[]);
-    let trimmed = final_redacted.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn looks_like_platform_mismatch(command: &str) -> bool {
-    let lower = command.trim_start().to_ascii_lowercase();
-    #[cfg(windows)]
-    {
-        lower.starts_with("export ")
-            || lower.starts_with("sudo ")
-            || lower.starts_with("chmod ")
-            || lower.starts_with("chown ")
-            || lower.contains(" /dev/null")
-            || lower.contains(" 2>/dev/null")
-            || lower.contains(" >/dev/null")
-    }
-    #[cfg(not(windows))]
-    {
-        lower.starts_with("set-executionpolicy ")
-            || lower.starts_with("get-childitem ")
-            || lower.starts_with("remove-item ")
-            || lower.contains(".exe ")
-            || lower.contains(".cmd ")
-            || lower.contains(":\\")
-    }
-}
-
-fn has_unquoted_windows_path_with_spaces(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    for needle in [":\\program files\\", ":\\program files (x86)\\"] {
-        let mut search_start = 0usize;
-        while let Some(relative_idx) = lower[search_start..].find(needle) {
-            let idx = search_start + relative_idx;
-            if idx < 2 || !is_quoted_at(command, idx - 2) {
-                return true;
-            }
-            search_start = idx + needle.len();
-        }
-    }
-    false
-}
-
-fn is_quoted_at(command: &str, idx: usize) -> bool {
-    command
-        .as_bytes()
-        .get(idx)
-        .is_some_and(|byte| matches!(byte, b'"' | b'\''))
-}
-
-fn has_risky_validation_semicolon(command: &str) -> bool {
-    command
-        .split(';')
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|pair| {
-            looks_like_validation_command(pair[0]) && looks_like_success_dependent_command(pair[1])
-        })
-}
-
-fn has_failure_hiding_pipeline(command: &str) -> bool {
-    command
-        .split('|')
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|pair| {
-            looks_like_validation_command(pair[0])
-                && contains_any_ascii_case(pair[1], &["grep", "select-string"])
-        })
-}
-
-fn has_suspicious_single_ampersand(command: &str) -> bool {
-    if !cfg!(windows) {
-        return false;
-    }
-    if command.trim_start().starts_with('&') {
-        return false;
-    }
-    command
-        .split(" & ")
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|pair| looks_like_validation_command(pair[0]) && !pair[1].trim().is_empty())
-}
-
-fn destructive_feedback_for_command(command: &str) -> Vec<GuardFeedback> {
-    let lower = command.to_ascii_lowercase();
-    let mut feedback = Vec::new();
-    let message =
-        "CDXCore: destructive-looking command detected; verify the target path and intent before running it.";
-
-    if lower.contains("rm -rf") || lower.contains("rm -fr") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.rm_rf",
-            shape: "destructive.rm_rf",
-            message,
-        });
-    }
-    if lower.contains("remove-item") && lower.contains("-recurse") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.remove_item_recurse",
-            shape: "destructive.remove_item_recurse",
-            message,
-        });
-    }
-    if lower.contains("del /s") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.del_s",
-            shape: "destructive.del_s",
-            message,
-        });
-    }
-    if lower.contains("rmdir /s") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.rmdir_s",
-            shape: "destructive.rmdir_s",
-            message,
-        });
-    }
-    if lower.contains("git reset --hard") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.git_reset_hard",
-            shape: "destructive.git_reset_hard",
-            message,
-        });
-    }
-    if lower.contains("git clean -fd") || lower.contains("git clean -df") {
-        feedback.push(GuardFeedback {
-            rule_id: "destructive.git_clean_fd",
-            shape: "destructive.git_clean_fd",
-            message,
-        });
-    }
-    feedback
-}
-
-fn looks_like_validation_command(command: &str) -> bool {
-    contains_any_ascii_case(
-        command,
-        &[
-            "cargo test",
-            "cargo clippy",
-            "cargo build",
-            "npm test",
-            "npm run build",
-            "pnpm test",
-            "pnpm build",
-            "pnpm run build",
-            "pytest",
-            "go test",
-            "dotnet test",
-            "mvn test",
-        ],
-    )
-}
-
-fn looks_like_success_dependent_command(command: &str) -> bool {
-    contains_any_ascii_case(
-        command,
-        &[
-            "cargo package",
-            "cargo publish",
-            "npm publish",
-            "pnpm publish",
-            "git commit",
-            "git push",
-            "deploy",
-            "release",
-            "docker push",
-            "gh release",
-        ],
-    )
-}
-
-fn contains_any_ascii_case(haystack: &str, needles: &[&str]) -> bool {
-    let lower = haystack.to_ascii_lowercase();
-    needles.iter().any(|needle| lower.contains(needle))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct GuardLedgerRecord {
-    schema_version: u8,
-    timestamp_unix_ms: u64,
-    event_name: String,
-    command_shape_hash: String,
-    cwd_hash: Option<String>,
-    rule_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-struct GuardLedgerPaths {
-    ledger: PathBuf,
-    key: PathBuf,
-    lock: PathBuf,
-}
-
-struct GuardLedgerLock {
-    path: PathBuf,
-}
-
-impl Drop for GuardLedgerLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn guard_ledger_enabled(ledger_requested: bool) -> bool {
-    match env::var("CDXCORE_GUARD_LEDGER") {
-        Ok(value) if value.trim().eq_ignore_ascii_case("off") => false,
-        Ok(value) if value.trim().eq_ignore_ascii_case("on") => true,
-        _ => ledger_requested,
-    }
-}
-
-fn guard_ledger_feedback(
-    _command: &str,
-    cwd: Option<&str>,
-    feedback: &[GuardFeedback],
-) -> Option<&'static str> {
-    let paths = guard_ledger_paths()?;
-    let key = load_or_create_guard_ledger_key(&paths.key).ok()?;
-    let now = current_unix_ms();
-    let rule_ids = guard_rule_ids(feedback);
-    let command_shape = normalized_command_shape(feedback);
-    let command_shape_hash = keyed_hash_hex(&key, command_shape.as_bytes());
-    let cwd_hash = cwd
-        .and_then(normalize_cwd_lexical)
-        .map(|cwd_shape| keyed_hash_hex(&key, cwd_shape.as_bytes()));
-    let records = read_guard_ledger(&paths.ledger, now).ok()?;
-
-    let previous_count = records
-        .iter()
-        .filter(|record| {
-            ledger_record_matches(record, &command_shape_hash, cwd_hash.as_deref(), &rule_ids)
-        })
-        .count();
-
-    let repeated_feedback = match previous_count {
-        0 => None,
-        1 => Some(
-            "CDXCore: this risky command shape has been seen repeatedly in this workspace window; inspect the command shape before retrying it.",
-        ),
-        _ => Some(
-            "CDXCore: this risky command shape has been seen repeatedly; avoid a retry loop by checking cwd, PATH, quoting, or splitting the command before trying again.",
-        ),
-    };
-
-    let record = GuardLedgerRecord {
-        schema_version: GUARD_LEDGER_SCHEMA_VERSION,
-        timestamp_unix_ms: now,
-        event_name: GuardHookEvent::PreToolUse.as_str().to_string(),
-        command_shape_hash,
-        cwd_hash,
-        rule_ids,
-    };
-    let _ = append_guard_ledger_observation(&paths, record, records);
-    repeated_feedback
-}
-
-fn guard_ledger_paths() -> Option<GuardLedgerPaths> {
-    let base = env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home_dir().map(|home| home.join(".codex")))?;
-    let dir = base.join("cdxcore");
-    Some(GuardLedgerPaths {
-        ledger: dir.join("guard-ledger-v1.jsonl"),
-        key: dir.join("guard-ledger-key"),
-        lock: dir.join("guard-ledger.lock"),
-    })
-}
-
-fn guard_rule_ids(feedback: &[GuardFeedback]) -> Vec<String> {
-    let mut ids = feedback
-        .iter()
-        .map(|item| item.rule_id.to_string())
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids.dedup();
-    ids
-}
-
-fn normalized_command_shape(feedback: &[GuardFeedback]) -> String {
-    let mut shapes = feedback
-        .iter()
-        .map(|item| item.shape.to_string())
-        .collect::<Vec<_>>();
-    shapes.sort();
-    shapes.dedup();
-    shapes.join("|")
-}
-
-fn normalize_cwd_lexical(cwd: &str) -> Option<String> {
-    let normalized = cwd.trim().replace('\\', "/");
-    if normalized.is_empty() {
-        None
-    } else {
-        Some(normalized)
-    }
-}
-
-fn current_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or_default()
-}
-
-fn load_or_create_guard_ledger_key(path: &Path) -> Result<[u8; GUARD_LEDGER_KEY_BYTES]> {
-    match fs::read_to_string(path) {
-        Ok(text) => decode_guard_key(text.trim())
-            .ok_or_else(|| anyhow!("malformed guard ledger key at {}", display_path(path))),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => create_guard_ledger_key(path),
-        Err(err) => Err(err).with_context(|| format!("read {}", display_path(path))),
-    }
-}
-
-fn create_guard_ledger_key(path: &Path) -> Result<[u8; GUARD_LEDGER_KEY_BYTES]> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", display_path(parent)))?;
-    }
-
-    let mut key = [0u8; GUARD_LEDGER_KEY_BYTES];
-    getrandom::getrandom(&mut key).map_err(|err| anyhow!("generate guard ledger key: {err}"))?;
-    let encoded = encode_hex(&key);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("create {}", display_path(path)))?;
-        file.write_all(encoded.as_bytes())
-            .with_context(|| format!("write {}", display_path(path)))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .with_context(|| format!("create {}", display_path(path)))?;
-        file.write_all(encoded.as_bytes())
-            .with_context(|| format!("write {}", display_path(path)))?;
-    }
-
-    Ok(key)
-}
-
-fn read_guard_ledger(path: &Path, now: u64) -> Result<Vec<GuardLedgerRecord>> {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("read {}", display_path(path))),
-    };
-
-    let mut reader = io::BufReader::new(file);
-    let mut records = Vec::new();
-    while let Some(line) = read_bounded_line(&mut reader, GUARD_LEDGER_MAX_LINE_BYTES, path)? {
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(text) = std::str::from_utf8(&line) else {
-            continue;
-        };
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<GuardLedgerRecord>(trimmed) else {
-            continue;
-        };
-        if valid_guard_ledger_record(&record, now) {
-            records.push(record);
-        }
-    }
-    Ok(records)
-}
-
-fn read_bounded_line<R: io::BufRead>(
-    reader: &mut R,
-    max_bytes: usize,
-    path: &Path,
-) -> Result<Option<Vec<u8>>> {
-    let mut line = Vec::new();
-    let mut saw_any = false;
-    let mut exceeded = false;
-    loop {
-        let buffer = reader
-            .fill_buf()
-            .with_context(|| format!("read {}", display_path(path)))?;
-        if buffer.is_empty() {
-            if !saw_any {
-                return Ok(None);
-            }
-            break;
-        }
-        saw_any = true;
-        if let Some(newline_idx) = buffer.iter().position(|byte| *byte == b'\n') {
-            if !exceeded {
-                let chunk = &buffer[..newline_idx];
-                if line.len() + chunk.len() <= max_bytes {
-                    line.extend_from_slice(chunk);
-                } else {
-                    exceeded = true;
-                }
-            }
-            reader.consume(newline_idx + 1);
-            break;
-        }
-        if !exceeded {
-            if line.len() + buffer.len() <= max_bytes {
-                line.extend_from_slice(buffer);
-            } else {
-                exceeded = true;
-            }
-        }
-        let consumed = buffer.len();
-        reader.consume(consumed);
-    }
-
-    if exceeded {
-        Ok(Some(Vec::new()))
-    } else {
-        Ok(Some(line))
-    }
 }
 
 enum AsyncBoundedLine {
@@ -1300,151 +446,6 @@ async fn read_async_bounded_line<R: AsyncBufRead + Unpin>(
     }
 }
 
-fn valid_guard_ledger_record(record: &GuardLedgerRecord, now: u64) -> bool {
-    record.schema_version == GUARD_LEDGER_SCHEMA_VERSION
-        && record.event_name == GuardHookEvent::PreToolUse.as_str()
-        && record.timestamp_unix_ms <= now
-        && now.saturating_sub(record.timestamp_unix_ms) <= GUARD_LEDGER_TTL_MS
-        && is_lower_hex_digest(&record.command_shape_hash)
-        && record.cwd_hash.as_deref().is_none_or(is_lower_hex_digest)
-        && !record.rule_ids.is_empty()
-        && record.rule_ids.windows(2).all(|pair| pair[0] < pair[1])
-}
-
-fn ledger_record_matches(
-    record: &GuardLedgerRecord,
-    command_shape_hash: &str,
-    cwd_hash: Option<&str>,
-    rule_ids: &[String],
-) -> bool {
-    record.command_shape_hash == command_shape_hash
-        && rule_ids
-            .iter()
-            .any(|rule_id| record.rule_ids.contains(rule_id))
-        && match (record.cwd_hash.as_deref(), cwd_hash) {
-            (Some(record_cwd), Some(current_cwd)) => record_cwd == current_cwd,
-            _ => true,
-        }
-}
-
-fn append_guard_ledger_observation(
-    paths: &GuardLedgerPaths,
-    record: GuardLedgerRecord,
-    mut valid_records: Vec<GuardLedgerRecord>,
-) -> Result<()> {
-    let Some(_lock) = acquire_guard_ledger_lock(&paths.lock) else {
-        return Ok(());
-    };
-    if let Some(parent) = paths.ledger.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create {}", display_path(parent)))?;
-    }
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.ledger)
-        .with_context(|| format!("open {}", display_path(&paths.ledger)))?;
-    let line = serde_json::to_string(&record)?;
-    file.write_all(line.as_bytes())
-        .with_context(|| format!("write {}", display_path(&paths.ledger)))?;
-    file.write_all(b"\n")
-        .with_context(|| format!("write {}", display_path(&paths.ledger)))?;
-
-    if fs::metadata(&paths.ledger)
-        .map(|metadata| metadata.len() > GUARD_LEDGER_MAX_BYTES)
-        .unwrap_or(false)
-    {
-        valid_records.push(record);
-        let _ = compact_guard_ledger(&paths.ledger, &valid_records);
-    }
-    Ok(())
-}
-
-fn acquire_guard_ledger_lock(path: &Path) -> Option<GuardLedgerLock> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).ok()?;
-    }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .ok()?;
-    let _ = writeln!(file, "{}", std::process::id());
-    Some(GuardLedgerLock {
-        path: path.to_path_buf(),
-    })
-}
-
-fn compact_guard_ledger(path: &Path, records: &[GuardLedgerRecord]) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    let tmp = parent.join("guard-ledger-v1.jsonl.tmp");
-    {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)
-            .with_context(|| format!("open {}", display_path(&tmp)))?;
-        for record in records {
-            let line = serde_json::to_string(record)?;
-            file.write_all(line.as_bytes())
-                .with_context(|| format!("write {}", display_path(&tmp)))?;
-            file.write_all(b"\n")
-                .with_context(|| format!("write {}", display_path(&tmp)))?;
-        }
-        let _ = file.sync_all();
-    }
-    if fs::rename(&tmp, path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    Ok(())
-}
-
-fn keyed_hash_hex(key: &[u8; GUARD_LEDGER_KEY_BYTES], bytes: &[u8]) -> String {
-    encode_hex(blake3::keyed_hash(key, bytes).as_bytes())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-fn decode_guard_key(text: &str) -> Option<[u8; GUARD_LEDGER_KEY_BYTES]> {
-    if text.len() != GUARD_LEDGER_KEY_BYTES * 2
-        || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return None;
-    }
-    let mut out = [0u8; GUARD_LEDGER_KEY_BYTES];
-    for (idx, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
-        out[idx] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
-    }
-    Some(out)
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn is_lower_hex_digest(value: &str) -> bool {
-    value.len() == GUARD_LEDGER_KEY_BYTES * 2
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 async fn build_diagnostics(mode: RunMode) -> Result<DiagnosticEnvelope> {
     let discovery = discover_codex_surface();
     let mut envelope = DiagnosticEnvelope::new();
@@ -1492,16 +493,12 @@ async fn build_diagnostics(mode: RunMode) -> Result<DiagnosticEnvelope> {
 
 fn exit_for(envelope: &DiagnosticEnvelope) -> i32 {
     if envelope.config_error_blocks_enumeration {
-        return 3;
+        return EXIT_COMPLETELY_UNWIRED;
     }
-    if envelope
-        .servers
-        .iter()
-        .any(|server| server.status == Status::Fail)
-    {
-        1
-    } else {
-        0
+    match envelope.status {
+        Status::Pass => EXIT_SUCCESSFULLY_WORKING,
+        Status::Warn => EXIT_WORKING_NEEDS_REVIEW,
+        Status::Fail => EXIT_COMPLETELY_UNWIRED,
     }
 }
 
@@ -1514,6 +511,11 @@ fn write_output(envelope: &DiagnosticEnvelope, json_output: bool) -> Result<()> 
     if envelope.servers.is_empty() {
         println!("CDXCore: no MCP servers discovered");
     }
+    if envelope.config_error_blocks_enumeration {
+        println!("Health: completely unwired");
+        println!("Meaning: {}", config_blocked_meaning());
+        println!("What to do: {}", config_blocked_action());
+    }
     for notice in &envelope.notices {
         println!("Notice: {notice}");
     }
@@ -1522,7 +524,13 @@ fn write_output(envelope: &DiagnosticEnvelope, json_output: bool) -> Result<()> 
     }
     for report in &envelope.servers {
         println!("Server: {}", report.name);
-        println!("Status: {}", status_text(report.status));
+        println!(
+            "Status: {} ({})",
+            status_text(report.status),
+            status_health_label(report.status)
+        );
+        println!("Meaning: {}", status_meaning(report.status));
+        println!("What to do: {}", status_action(report.status));
         if let Some(cause) = &report.probable_cause {
             println!("Cause: {cause}");
         }
@@ -1545,6 +553,44 @@ fn status_text(status: Status) -> &'static str {
         Status::Warn => "warn",
         Status::Fail => "fail",
     }
+}
+
+fn status_health_label(status: Status) -> &'static str {
+    match status {
+        Status::Pass => "successfully working",
+        Status::Warn => "working but needs review",
+        Status::Fail => "completely unwired",
+    }
+}
+
+fn status_meaning(status: Status) -> &'static str {
+    match status {
+        Status::Pass => "CDXCore completed this check and found no diagnostic concerns.",
+        Status::Warn => {
+            "CDXCore could inspect this server or config, but found something that needs review."
+        }
+        Status::Fail => "CDXCore could not prove this server is wired and working.",
+    }
+}
+
+fn status_action(status: Status) -> &'static str {
+    match status {
+        Status::Pass => "No action is required.",
+        Status::Warn => {
+            "Review Cause, Evidence, and Suggested fix; verify client-owned or v1-limited checks from the owning Codex client."
+        }
+        Status::Fail => {
+            "Treat the server as unavailable, fix the reported command/cwd/PATH/env/transport/handshake issue, then rerun check or doctor."
+        }
+    }
+}
+
+fn config_blocked_meaning() -> &'static str {
+    "CDXCore could not read or parse enough config to enumerate MCP servers."
+}
+
+fn config_blocked_action() -> &'static str {
+    "Fix the reported TOML, JSON, or path problem, then rerun scan before profiling servers."
 }
 
 fn discover_codex_surface() -> Discovery {
@@ -2261,8 +1307,7 @@ fn missing_server_report(name: &str) -> ServerReport {
                 .to_string(),
         ),
         suggested_fix: Some(
-            "run cdxcore inspect-config --json and verify the server name and source provenance"
-                .to_string(),
+            "run cdxcore scan --json and verify the server name and source provenance".to_string(),
         ),
         safe_config_snippet: None,
         risk: Some(
@@ -3781,627 +2826,32 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn install_command_guard_hooks_writes_opt_in_hooks_json() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
+    fn diagnostic_exit_codes_express_health_levels() {
+        let mut envelope = DiagnosticEnvelope::new();
+        assert_eq!(exit_for(&envelope), EXIT_SUCCESSFULLY_WORKING);
 
-        assert!(install_command_guard_hooks(&path, false).unwrap());
-        assert!(!install_command_guard_hooks(&path, false).unwrap());
+        envelope.status = Status::Warn;
+        assert_eq!(exit_for(&envelope), EXIT_WORKING_NEEDS_REVIEW);
 
-        let text = fs::read_to_string(path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let hooks = value.get("hooks").and_then(JsonValue::as_object).unwrap();
-        assert!(hook_group_contains_command(
-            hooks
-                .get("PreToolUse")
-                .and_then(JsonValue::as_array)
-                .unwrap()
-                .first()
-                .unwrap(),
-            "cdxcore guard-hook pre-tool-use"
-        ));
-        assert!(hooks.get("PostToolUse").is_none());
+        envelope.status = Status::Fail;
+        assert_eq!(exit_for(&envelope), EXIT_COMPLETELY_UNWIRED);
 
-        let ledger_path = dir.path().join("hooks-ledger.json");
-        assert!(install_command_guard_hooks(&ledger_path, true).unwrap());
-        let text = fs::read_to_string(ledger_path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let hooks = value.get("hooks").and_then(JsonValue::as_object).unwrap();
-        assert!(hook_group_contains_command(
-            hooks
-                .get("PreToolUse")
-                .and_then(JsonValue::as_array)
-                .unwrap()
-                .first()
-                .unwrap(),
-            "cdxcore guard-hook pre-tool-use --ledger"
-        ));
+        envelope.status = Status::Warn;
+        envelope.config_error_blocks_enumeration = true;
+        assert_eq!(exit_for(&envelope), EXIT_COMPLETELY_UNWIRED);
     }
 
     #[test]
-    fn install_command_guard_hooks_switches_ledger_mode_without_duplicates() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
-
-        assert!(install_command_guard_hooks(&path, false).unwrap());
-        assert!(install_command_guard_hooks(&path, true).unwrap());
-        assert!(!install_command_guard_hooks(&path, true).unwrap());
-
-        let text = fs::read_to_string(&path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let groups = value
-            .get("hooks")
-            .and_then(|hooks| hooks.get("PreToolUse"))
-            .and_then(JsonValue::as_array)
-            .unwrap();
-        let handlers = groups
-            .iter()
-            .flat_map(|group| {
-                group
-                    .get("hooks")
-                    .and_then(JsonValue::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .filter(|handler| {
-                handler.get("type").and_then(JsonValue::as_str) == Some("command")
-                    && handler
-                        .get("command")
-                        .and_then(JsonValue::as_str)
-                        .is_some_and(|command| {
-                            command.starts_with("cdxcore guard-hook pre-tool-use")
-                        })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(handlers.len(), 1);
+    fn diagnostic_health_text_explains_statuses() {
+        assert_eq!(status_health_label(Status::Pass), "successfully working");
         assert_eq!(
-            handlers[0].get("command").and_then(JsonValue::as_str),
-            Some("cdxcore guard-hook pre-tool-use --ledger")
+            status_health_label(Status::Warn),
+            "working but needs review"
         );
-        assert_eq!(
-            handlers[0].get("timeout").and_then(JsonValue::as_u64),
-            Some(3)
-        );
-
-        assert!(install_command_guard_hooks(&path, false).unwrap());
-        let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"command\": \"cdxcore guard-hook pre-tool-use\""));
-        assert!(!text.contains("\"command\": \"cdxcore guard-hook pre-tool-use --ledger\""));
-    }
-
-    #[test]
-    fn install_command_guard_hooks_reconciles_legacy_unanchored_matcher() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
-        fs::write(
-            &path,
-            json!({
-                "hooks": {
-                    "PreToolUse": [{
-                        "matcher": "Bash",
-                        "hooks": [{
-                            "type": "command",
-                            "command": "cdxcore guard-hook pre-tool-use",
-                            "timeout": 3
-                        }]
-                    }]
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        assert!(install_command_guard_hooks(&path, true).unwrap());
-        let text = fs::read_to_string(&path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let group = value
-            .get("hooks")
-            .and_then(|hooks| hooks.get("PreToolUse"))
-            .and_then(JsonValue::as_array)
-            .and_then(|groups| groups.first())
-            .unwrap();
-
-        assert_eq!(
-            group.get("matcher").and_then(JsonValue::as_str),
-            Some("^Bash$")
-        );
-        assert!(hook_group_contains_command(
-            group,
-            "cdxcore guard-hook pre-tool-use --ledger"
-        ));
-    }
-
-    #[test]
-    fn install_command_guard_hooks_does_not_rewrite_shared_user_hook_group() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
-        fs::write(
-            &path,
-            json!({
-                "hooks": {
-                    "PreToolUse": [{
-                        "matcher": "Bash",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "cdxcore guard-hook pre-tool-use",
-                                "timeout": 3
-                            },
-                            {
-                                "type": "command",
-                                "command": "user-tool --check",
-                                "timeout": 9
-                            }
-                        ]
-                    }]
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        assert!(install_command_guard_hooks(&path, true).unwrap());
-        let text = fs::read_to_string(&path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let groups = value
-            .get("hooks")
-            .and_then(|hooks| hooks.get("PreToolUse"))
-            .and_then(JsonValue::as_array)
-            .unwrap();
-
-        assert_eq!(groups.len(), 2);
-        assert_eq!(
-            groups[0].get("matcher").and_then(JsonValue::as_str),
-            Some("Bash")
-        );
-        assert!(hook_group_contains_command(&groups[0], "user-tool --check"));
-        assert!(!hook_group_contains_command(
-            &groups[0],
-            "cdxcore guard-hook pre-tool-use"
-        ));
-        assert_eq!(
-            groups[1].get("matcher").and_then(JsonValue::as_str),
-            Some("^Bash$")
-        );
-        assert!(hook_group_contains_command(
-            &groups[1],
-            "cdxcore guard-hook pre-tool-use --ledger"
-        ));
-    }
-
-    #[test]
-    fn install_command_guard_hooks_removes_duplicate_managed_only_groups() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
-        fs::write(
-            &path,
-            json!({
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [{
-                                "type": "command",
-                                "command": "cdxcore guard-hook pre-tool-use",
-                                "timeout": 3
-                            }]
-                        },
-                        {
-                            "matcher": "Bash",
-                            "hooks": [{
-                                "type": "command",
-                                "command": "cdxcore guard-hook pre-tool-use --ledger",
-                                "timeout": 3
-                            }]
-                        }
-                    ]
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        assert!(install_command_guard_hooks(&path, true).unwrap());
-        let text = fs::read_to_string(&path).unwrap();
-        let value: JsonValue = serde_json::from_str(&text).unwrap();
-        let groups = value
-            .get("hooks")
-            .and_then(|hooks| hooks.get("PreToolUse"))
-            .and_then(JsonValue::as_array)
-            .unwrap();
-
-        assert_eq!(groups.len(), 1);
-        assert!(hook_group_contains_command(
-            &groups[0],
-            "cdxcore guard-hook pre-tool-use --ledger"
-        ));
-    }
-
-    #[test]
-    fn codex_home_path_honors_codex_home_override() {
-        assert_eq!(
-            codex_home_path_from_env(
-                Some(OsString::from("C:\\custom-codex-home")),
-                Some(PathBuf::from("C:\\Users\\example"))
-            ),
-            PathBuf::from("C:\\custom-codex-home")
-        );
-        assert_eq!(
-            codex_home_path_from_env(None, Some(PathBuf::from("C:\\Users\\example"))),
-            PathBuf::from("C:\\Users\\example").join(".codex")
-        );
-    }
-
-    #[test]
-    fn guard_hook_noop_cases_are_silent() {
-        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "").is_none());
-        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "{").is_none());
-        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "[]").is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({"tool_name":"Read","tool_input":{"command":"rm -rf target"}}).to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({"tool_name":"Bash","tool_input":{}}).to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({"tool_name":"Bash","tool_input":{"command":false}}).to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "hook_event_name":"PostToolUse",
-                "tool_name":"Bash",
-                "tool_input":{"command":"rm -rf target"}
-            })
-            .to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({"tool_name":"apply_patch","tool_input":{"command":"rm -rf target"}})
-                .to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({"tool_name":"mcp__server__tool","tool_input":{"command":"rm -rf target"}})
-                .to_string()
-        )
-        .is_none());
-        assert!(guard_hook_output(
-            GuardHookEvent::PostToolUse,
-            &json!({"tool_name":"Bash","tool_input":{"command":"rm -rf target"}}).to_string()
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn guard_hook_feedback_shape_is_exact_and_non_blocking() {
-        let output = guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "hook_event_name":"PreToolUse",
-                "tool_name":"Bash",
-                "tool_input":{"command":"rm -rf target"}
-            })
-            .to_string(),
-        )
-        .expect("feedback output");
-        let value: JsonValue = serde_json::from_str(&output).unwrap();
-        let object = value.as_object().unwrap();
-        assert_eq!(object.len(), 1);
-        let hook_output = object
-            .get("hookSpecificOutput")
-            .and_then(JsonValue::as_object)
-            .unwrap();
-        assert_eq!(hook_output.len(), 2);
-        assert_eq!(
-            hook_output.get("hookEventName").and_then(JsonValue::as_str),
-            Some("PreToolUse")
-        );
-        assert!(hook_output
-            .get("additionalContext")
-            .and_then(JsonValue::as_str)
-            .unwrap()
-            .contains("destructive-looking"));
-        for forbidden in [
-            "permissionDecision",
-            "permissionDecisionReason",
-            "updatedInput",
-            "updatedMCPToolOutput",
-            "suppressOutput",
-            "interrupt",
-            "decision",
-            "reason",
-            "continue",
-            "stopReason",
-            "systemMessage",
-            "updatedPermissions",
-        ] {
-            assert!(!output.contains(forbidden));
-        }
-    }
-
-    #[test]
-    fn guard_context_is_redacted_capped_and_empty_safe() {
-        let marker = ["sk", "-", "GUARDLEAK", "-", "1234567890abcdef"].join("");
-        let context = format!("token {marker} {}", "x".repeat(2_000));
-        let sanitized = sanitize_guard_context(&context).unwrap();
-        assert!(!sanitized.contains(&marker));
-        assert!(sanitized.chars().count() <= GUARD_CONTEXT_CHAR_LIMIT);
-        assert!(sanitize_guard_context(" \n\t ").is_none());
-    }
-
-    #[test]
-    fn guard_hook_pre_rules_are_conservative() {
-        let risky_semicolon = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"cargo test; cargo package --allow-dirty --list"}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert!(risky_semicolon.contains("validation/build/test"));
-
-        let normal_semicolon = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"Write-Host one; Write-Host two"}
-            })
-            .to_string(),
-        );
-        assert!(normal_semicolon.is_none());
-
-        let reporting_semicolon = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"cargo test; echo done"}
-            })
-            .to_string(),
-        );
-        assert!(reporting_semicolon.is_none());
-
-        let risky_pipeline = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"cargo test | Select-String failed"}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert!(risky_pipeline.contains("pipeline"));
-
-        let normal_pipeline = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"Get-Process | Sort-Object CPU"}
-            })
-            .to_string(),
-        );
-        assert!(normal_pipeline.is_none());
-    }
-
-    #[test]
-    fn guard_hook_detects_quoting_platform_and_destructive_shapes() {
-        let path_feedback = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"C:\\Program Files\\nodejs\\npx.cmd --version"}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert!(path_feedback.contains("quote Windows paths"));
-
-        let quoted_path_feedback = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"\"C:\\Program Files\\nodejs\\npx.cmd\" --version"}
-            })
-            .to_string(),
-        );
-        if cfg!(windows) {
-            assert!(quoted_path_feedback.is_none());
-        } else {
-            assert!(quoted_path_feedback
-                .as_deref()
-                .is_some_and(|feedback| feedback.contains("different shell/platform")));
-        }
-
-        let ampersand_feedback = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"cargo test & cargo build"}
-            })
-            .to_string(),
-        );
-        if cfg!(windows) {
-            assert!(ampersand_feedback
-                .as_deref()
-                .is_some_and(|feedback| feedback.contains("single '&'")));
-        } else {
-            assert!(ampersand_feedback.is_none());
-        }
-
-        let destructive_feedback = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":"git reset --hard"}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert!(destructive_feedback.contains("destructive-looking"));
-
-        let platform_command = if cfg!(windows) {
-            "export TOKEN=value"
-        } else {
-            "Get-ChildItem ."
-        };
-        let platform_feedback = guard_hook_context(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":platform_command}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert!(platform_feedback.contains("different shell/platform"));
-    }
-
-    #[test]
-    fn guard_hook_does_not_read_transcript_or_write_files() {
-        let dir = tempdir().unwrap();
-        let transcript = dir.path().join("transcript.jsonl");
-        let canary = "do-not-read-transcript-canary";
-        fs::write(&transcript, canary).unwrap();
-        let before = fs::read_dir(dir.path()).unwrap().count();
-        let created = dir.path().join("created-by-hook");
-        let output = guard_hook_output(
-            GuardHookEvent::PreToolUse,
-            &json!({
-                "tool_name":"Bash",
-                "tool_input":{"command":format!("New-Item {}; rm -rf target", created.display())},
-                "transcript_path": transcript
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let after = fs::read_dir(dir.path()).unwrap().count();
-        assert_eq!(before, after);
-        assert!(!created.exists());
-        assert!(!output.contains(canary));
-    }
-
-    #[test]
-    fn guard_hook_packaging_stays_opt_in() {
-        let manifest: JsonValue =
-            serde_json::from_str(include_str!("../.codex-plugin/plugin.json")).unwrap();
-        assert!(manifest.get("hooks").is_none());
-        assert!(manifest.get("hook").is_none());
-
-        let docs = include_str!("../docs/v2-command-guard.md");
-        let readme = include_str!("../README.md");
-        let example = include_str!("../docs/examples/codex-command-guard-hooks.json");
-        let install_ps1 = include_str!("../scripts/install.ps1");
-        let install_sh = include_str!("../scripts/install.sh");
-        let release_workflow_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(".github")
-            .join("workflows")
-            .join("release-assets.yml");
-        let release_workflow = fs::read_to_string(release_workflow_path).unwrap_or_default();
-        assert!(docs.contains("docs/examples/codex-command-guard-hooks.json"));
-        assert!(readme.contains("docs/examples/codex-command-guard-hooks.json"));
-        assert!(install_ps1.contains("EnableRetryLedger"));
-        assert!(install_sh.contains("--enable-retry-ledger"));
-        assert!(install_ps1.contains("$schemaDestination = Join-Path $InstallDir \"schemas\""));
-        assert!(install_ps1.contains("Join-Path $extractDir \"docs\""));
-        assert!(install_sh.contains("[ -d \"$extract_dir/docs\" ]"));
-        assert!(install_sh.contains("shell_quote()"));
-        assert!(install_sh.contains("export PATH=%s:\"$PATH\""));
-        if !release_workflow.is_empty() {
-            assert!(release_workflow.contains("cp -R docs"));
-            assert!(release_workflow.contains("Copy-Item -LiteralPath docs"));
-            assert!(release_workflow.contains(".codex-plugin"));
-            assert!(release_workflow.contains(".mcp.json"));
-            assert!(release_workflow.contains("cargo fmt --check"));
-            assert!(release_workflow.contains("cargo test --locked"));
-            assert!(release_workflow.contains("cargo clippy --locked --all-targets -- -D warnings"));
-        }
-        assert!(example.contains("\"timeout\": 3"));
-        assert!(!example.contains("PostToolUse"));
-        assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("hooks")
-            .join("hooks.json")
-            .exists());
-    }
-
-    #[test]
-    fn guard_ledger_reader_keeps_only_valid_recent_records() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("guard-ledger-v1.jsonl");
-        let now = GUARD_LEDGER_TTL_MS * 2;
-        let hash = "a".repeat(GUARD_LEDGER_KEY_BYTES * 2);
-        let valid = GuardLedgerRecord {
-            schema_version: GUARD_LEDGER_SCHEMA_VERSION,
-            timestamp_unix_ms: now - 1_000,
-            event_name: GuardHookEvent::PreToolUse.as_str().to_string(),
-            command_shape_hash: hash.clone(),
-            cwd_hash: None,
-            rule_ids: vec!["destructive.git_reset_hard".to_string()],
-        };
-        let mut expired = valid.clone();
-        expired.timestamp_unix_ms = now - GUARD_LEDGER_TTL_MS - 1;
-        let mut future = valid.clone();
-        future.timestamp_unix_ms = now + 1;
-        let mut invalid_rules = valid.clone();
-        invalid_rules.rule_ids = vec![
-            "destructive.rm_rf".to_string(),
-            "destructive.git_reset_hard".to_string(),
-        ];
-
-        let text = [
-            "not json".to_string(),
-            "x".repeat(GUARD_LEDGER_MAX_LINE_BYTES + 1),
-            serde_json::to_string(&expired).unwrap(),
-            serde_json::to_string(&future).unwrap(),
-            serde_json::to_string(&invalid_rules).unwrap(),
-            serde_json::to_string(&valid).unwrap(),
-        ]
-        .join("\n");
-        fs::write(&path, text).unwrap();
-
-        let records = read_guard_ledger(&path, now).unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].command_shape_hash, hash);
-    }
-
-    #[test]
-    fn guard_ledger_shapes_are_privacy_preserving_and_stable() {
-        let rm_rf = guard_feedback_for_command(GuardHookEvent::PreToolUse, "rm -rf ./target");
-        let quoted_rm_rf =
-            guard_feedback_for_command(GuardHookEvent::PreToolUse, "rm -rf \"./target\"");
-        let git_reset = guard_feedback_for_command(GuardHookEvent::PreToolUse, "git reset --hard");
-
-        assert_eq!(
-            normalized_command_shape(&rm_rf),
-            normalized_command_shape(&quoted_rm_rf)
-        );
-        assert_ne!(
-            normalized_command_shape(&rm_rf),
-            normalized_command_shape(&git_reset)
-        );
-        assert_eq!(
-            normalize_cwd_lexical(" C:\\Users\\Alice\\Project "),
-            Some("C:/Users/Alice/Project".to_string())
-        );
-    }
-
-    #[test]
-    fn malformed_guard_ledger_key_is_not_overwritten() {
-        let dir = tempdir().unwrap();
-        let key_path = dir.path().join("guard-ledger-key");
-        fs::write(&key_path, "not-a-valid-key").unwrap();
-
-        assert!(load_or_create_guard_ledger_key(&key_path).is_err());
-        assert_eq!(fs::read_to_string(&key_path).unwrap(), "not-a-valid-key");
+        assert_eq!(status_health_label(Status::Fail), "completely unwired");
+        assert!(status_meaning(Status::Warn).contains("needs review"));
+        assert!(status_action(Status::Fail).contains("rerun check or doctor"));
+        assert!(config_blocked_action().contains("rerun scan"));
     }
 
     #[test]

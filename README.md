@@ -1,12 +1,8 @@
 # CDXCore
 
-CDXCore is a workflow helper for Codex.
+CDXCore is a Codex MCP diagnostics and startup profiler.
 
-It gives Codex a local support layer for the stuff that slows agent work down:
-MCP startup problems, confusing client config, PATH differences, repeated risky
-shell-command shapes, and a tiny set of safe PowerShell command repairs.
-
-The first shipping workflow is MCP startup/config diagnostics. If an MCP server
+It gives Codex a local support layer for MCP startup problems, confusing client config, and PATH differences. If an MCP server
 works in your terminal but Codex cannot start it, CDXCore helps answer the
 boring but important questions:
 
@@ -18,13 +14,10 @@ boring but important questions:
 - Did `tools/list` hang, return bad tools, or miss `inputSchema`?
 - Are plugin, bundled, or managed MCP entries confusing the picture?
 
-MCP diagnostics are only one part of CDXCore. Command Guard adds workflow help
-before Codex runs shell commands, so Codex can catch command-shape problems
-earlier. Claude Desktop, Cursor, Windsurf, and VS Code readers are planned
-later.
+Command Guard moved to the standalone CDXCoreGuard tool. CDXCore stays focused on the v1 read-only MCP profiler.
 
 Do not install CDXCore through an MCP marketplace for normal use. Install the
-`cdxcore` CLI, then let Codex launch `cdxcore serve`.
+`cdxcore` CLI, then let Codex launch `cdxcore mcp-server`.
 
 ## Quick Install
 
@@ -57,7 +50,7 @@ That registers this MCP entry with Codex:
 ```toml
 [mcp_servers.cdxcore]
 command = "cdxcore"
-args = ["serve"]
+args = ["mcp-server"]
 ```
 
 Restart Codex after install so the app sees the updated PATH.
@@ -67,7 +60,7 @@ Restart Codex after install so the app sees the updated PATH.
 Most of the time, start here:
 
 ```powershell
-cdxcore profile
+cdxcore doctor
 ```
 
 That inspects your Codex MCP config and briefly starts each configured stdio MCP
@@ -78,7 +71,9 @@ Example report:
 
 ```text
 Server: notion
-Status: fail
+Status: fail (completely unwired)
+Meaning: CDXCore could not prove this server is wired and working.
+What to do: Treat the server as unavailable, fix the reported command/cwd/PATH/env/transport/handshake issue, then rerun check or doctor.
 Cause: npx not found from Codex PATH
 Evidence: command failed before MCP initialize
 Suggested fix: use an absolute Node/npm path or add PATH in the MCP env block
@@ -86,39 +81,59 @@ Config source: C:\Users\<you>\.codex\config.toml
 Secrets: redacted
 ```
 
-Other commands:
+Suggested command order:
 
 ```powershell
-cdxcore inspect-config
-cdxcore profile
-cdxcore validate <server>
-cdxcore diagnose-runtime <server>
-cdxcore suggest-fixes
-cdxcore serve
+cdxcore scan
+cdxcore doctor
+cdxcore explain <server>
+cdxcore fixes
+cdxcore check <server>
+cdxcore mcp-server
 ```
+
+Older names remain available as aliases: `inspect-config`, `profile`,
+`diagnose-runtime`, `suggest-fixes`, `validate`, and `serve`.
 
 Add `--json` when you want machine-readable output:
 
 ```powershell
-cdxcore profile --json
+cdxcore doctor --json
 ```
 
 The JSON schema is `cdxcore.diagnostics.v1` and lives at
 `schemas/cdxcore.diagnostics.v1.schema.json`.
 
-Exit codes:
+Diagnostic exit codes:
 
-- `0`: completed with no failing diagnostics
-- `1`: completed and at least one server failed
-- `2`: bad CLI usage or input
-- `3`: config could not be read or parsed enough to enumerate servers
-- `4`: unexpected CDXCore error
+- `0`: successfully working; diagnostics completed with `pass`
+- `1`: working but needs review; diagnostics completed with `warn`
+- `2`: completely unwired; diagnostics completed with `fail`, or config could
+  not be read or parsed enough to enumerate servers
 
-Warnings alone still exit `0`.
+CLI parser errors and unexpected internal CDXCore errors are not health results.
 
-## What `cdxcore serve` Is
+Health meanings:
 
-`cdxcore serve` starts CDXCore as an MCP server for Codex.
+- `pass` / exit `0` means CDXCore completed the requested check and found no
+  diagnostic concerns. No action is required.
+- `warn` / exit `1` means the server or config appears reachable enough to
+  inspect, but CDXCore found something that needs review. Read `Cause`,
+  `Evidence`, and `Suggested fix`; common actions are verifying the result from
+  the Codex client that owns the config, moving literal secrets into environment
+  variables, or confirming that a v1 limitation such as HTTP static-only checks
+  is acceptable.
+- `fail` / exit `2` means CDXCore could not prove the server is wired and
+  working. Treat the server as unavailable until the reported command, cwd,
+  PATH, env, transport, or MCP handshake problem is fixed, then rerun
+  `cdxcore check <server>` or `cdxcore doctor`.
+- Config blocked / exit `2` means CDXCore could not read or parse enough config
+  to enumerate servers. Fix the reported TOML/JSON/path problem first, then run
+  `cdxcore scan` before profiling individual servers.
+
+## What `cdxcore mcp-server` Is
+
+`cdxcore mcp-server` starts CDXCore as an MCP server for Codex.
 
 It exposes these tools to Codex:
 
@@ -186,128 +201,10 @@ The only command that writes Codex config is:
 cdxcore setup codex
 ```
 
-That setup command is explicit. By default it installs the CDXCore MCP entry.
-Add the Command Guard flags below when you want Codex to get command feedback
-and repairs too.
+That setup command is explicit. It installs only the CDXCore MCP entry.
 
-Profiling launches configured stdio MCP servers only when you run `profile`,
-`validate <server>`, or the matching MCP diagnostic tool.
-
-## Command Guard
-
-Command Guard is the workflow-helper side of CDXCore. It gives Codex a quick
-pre-run check for shell commands, so Codex can see common command problems
-before they waste a tool call.
-
-You can use it together with the MCP diagnostics workflow, or install it on its
-own after setup.
-
-### v2a: Feedback Only
-
-v2a reads the pending Bash hook payload and gives Codex extra context when a
-command shape deserves a second look.
-
-It can point out:
-
-- Linux syntax in a PowerShell-backed session
-- unquoted Windows paths with spaces
-- validation/build/test commands chained in a way that may hide failure
-- destructive-looking commands like `rm -rf`, `Remove-Item -Recurse`,
-  `git reset --hard`, or `git clean -fd`
-
-v2a is lightweight: it does not block, rewrite, execute, store, or write
-anything. Bad hook input is a silent no-op.
-
-Enable it:
-
-```powershell
-cdxcore setup codex --enable-command-guard
-```
-
-### v2b: Repeated Command-Shape Memory
-
-v2b is v2a plus a tiny local ledger. It helps Codex notice loops in command
-behavior.
-
-It lets CDXCore say, “this same command shape has been seen repeatedly.” It
-does not guess whether the command failed.
-
-The ledger stores keyed hashes of normalized command shapes and cwd values. It
-does not store raw commands, raw cwd, env values, stdout, stderr, transcript
-text, tool responses, or secrets.
-
-Enable it:
-
-```powershell
-cdxcore setup codex --enable-command-guard --enable-retry-ledger
-```
-
-Ledger files live under:
-
-- `$CODEX_HOME/cdxcore/guard-ledger-v1.jsonl`
-- `$CODEX_HOME/cdxcore/guard-ledger-key`
-- `$CODEX_HOME/cdxcore/guard-ledger.lock`
-
-If `CODEX_HOME` is not set, CDXCore uses `~/.codex/cdxcore`. The ledger is safe
-to delete. A stale `guard-ledger.lock` is also safe to delete.
-
-### v2c: PowerShell Repair
-
-v2c can repair a very small set of obvious PowerShell command mistakes by
-returning Codex `updatedInput`.
-
-It only runs when command repair is enabled and PowerShell shell proof is
-explicit. Windows alone is not proof.
-
-Repairs v2c may apply:
-
-- `cmd > /dev/null` -> `cmd > $null`
-- `cmd 2> /dev/null` -> `cmd 2> $null`
-- `rg 'literal text' src` -> `rg -F 'literal text' src`
-
-It leaves broad or ambiguous commands alone: destructive commands, pipelines,
-chains, multiline commands, input redirection, `grep -> rg`, `Select-String`,
-commands with PowerShell variables/expressions, and commands containing
-secret-looking material.
-
-Install the repair hook:
-
-```powershell
-cdxcore setup codex --enable-command-guard --enable-command-repair
-```
-
-That installs the repair layer but keeps it in feedback mode until shell proof
-is explicit. To allow the PowerShell repair allowlist:
-
-```powershell
-cdxcore setup codex --enable-command-guard --enable-command-repair --shell powershell
-```
-
-Setup installs only the PreToolUse hook. The `post-tool-use` entrypoint exists
-for future/custom use, but setup does not install it by default.
-
-The standalone hook example is at
-`docs/examples/codex-command-guard-hooks.json`.
-
-## Command Guard During Install
-
-Windows:
-
-```powershell
-$installer = "$env:TEMP\install-cdxcore.ps1"
-irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 -OutFile $installer
-powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableCommandGuard
-powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableRetryLedger
-powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableCommandRepair -CommandRepairShell powershell
-```
-
-macOS/Linux:
-
-```sh
-curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-command-guard
-curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-retry-ledger
-curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-command-repair --command-repair-shell powershell
-```
+Profiling launches configured stdio MCP servers only when you run `doctor`,
+`check <server>`, or the matching MCP diagnostic tool.
 
 ## If PATH Is Weird
 
@@ -320,7 +217,7 @@ absolute path in `~/.codex/config.toml` or `$CODEX_HOME/config.toml`:
 [mcp_servers.cdxcore]
 startup_timeout_sec = 15
 command = "C:\\Users\\you\\AppData\\Local\\CDXCore\\bin\\cdxcore.exe"
-args = ["serve"]
+args = ["mcp-server"]
 ```
 
 For local developer testing, point at your local build:
@@ -329,7 +226,7 @@ For local developer testing, point at your local build:
 [mcp_servers.cdxcore]
 startup_timeout_sec = 15
 command = "C:\\Users\\kuh\\Desktop\\CDXCore\\target\\release\\cdxcore.exe"
-args = ["serve"]
+args = ["mcp-server"]
 ```
 
 ## Plugin Files In This Repo
@@ -347,7 +244,7 @@ The plugin wrapper runs:
 ```json
 {
   "command": "cdxcore",
-  "args": ["serve"]
+  "args": ["mcp-server"]
 }
 ```
 
@@ -374,8 +271,6 @@ If you also want to remove the Codex MCP entry, delete this block from
 [mcp_servers.cdxcore]
 ```
 
-If you enabled command guard, remove the CDXCore PreToolUse entry from
-`$CODEX_HOME/hooks.json` or `~/.codex/hooks.json`.
 
 ## For Contributors
 
@@ -388,13 +283,15 @@ Local checks:
 cargo build --release
 cargo test
 cargo clippy --all-targets -- -D warnings
+sh -n scripts/install.sh
+bash -n scripts/install.sh
 ```
 
 Release downloads:
 
-- Windows x64: `cdxcore-v0.1.4-x86_64-pc-windows-msvc.zip`
-- Linux x64: `cdxcore-v0.1.4-x86_64-unknown-linux-gnu.tar.gz`
-- macOS Apple Silicon: `cdxcore-v0.1.4-aarch64-apple-darwin.tar.gz`
+- Windows x64: `cdxcore-v0.1.5-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxcore-v0.1.5-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Apple Silicon: `cdxcore-v0.1.5-aarch64-apple-darwin.tar.gz`
 - Installers: `install.ps1`, `install.sh`
 
 Latest release:
@@ -406,7 +303,7 @@ https://github.com/ikhdark/CDXCore/releases/latest
 Versioned release:
 
 ```text
-https://github.com/ikhdark/CDXCore/releases/tag/v0.1.4
+https://github.com/ikhdark/CDXCore/releases/tag/v0.1.5
 ```
 
 Verify downloads against `SHA256SUMS.txt`. CDXCore binaries are not signed yet.

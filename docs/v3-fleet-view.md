@@ -43,8 +43,7 @@ aggregate the results.
 ## Trust model
 
 v3 **remains read-only**, the same trust proposition as v1. It crosses no state
-or control line. (Contrast with v2, where v2b introduces an explicit opt-in
-writable retry-shape ledger and v2c blocking remains deferred — see below.)
+or control line. (Command Guard now lives in the separate CDXCoreGuard tool and remains outside v3 fleet inspection.)
 
 ## Command surface and the static-vs-profile distinction
 
@@ -88,11 +87,9 @@ single-client run — so the no-raw-secrets guarantee applies to the **aggregate
 report as a whole: aggregated fleet reports must **never** expose raw secrets in
 any field.
 
-## Relationship to v2
+## Relationship to CDXCoreGuard
 
-The **v2 command guard remains orthogonal** to v3. v3 is a read-only, cross-client
-extension of the profiler; v2 is a hook-based command guard with its own staged
-trust escalations. Neither depends on the other, and either may land first.
+The former v2 command guard is now the separate CDXCoreGuard tool. v3 remains a read-only extension of the profiler and does not depend on CDXCoreGuard.
 
 ## Reaffirmation
 
