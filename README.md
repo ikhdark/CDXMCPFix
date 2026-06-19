@@ -77,6 +77,9 @@ command = "cdxcore"
 args = ["serve"]
 ```
 
+The manual fallback below includes `startup_timeout_sec = 15`. The default
+setup path uses Codex's MCP CLI, which writes the launch command and args.
+
 The setup command prefers:
 
 ```powershell
@@ -101,7 +104,7 @@ Uninstall CDXCore with the same package manager or release channel used for the
 original CLI install. If you also want to remove the Codex MCP entry, delete the
 `[mcp_servers.cdxcore]` block from `~/.codex/config.toml`.
 
-Normal users should not clone this repository, install Rust, or build from
+Normal users do not need to clone this repository, install Rust, or build from
 source.
 
 ## Manual fallback
@@ -165,14 +168,17 @@ Exit codes:
 ## Read-only contract
 
 CDXCore diagnostic commands and MCP tools do not edit config files, delete state,
-reset state, print raw env values by default, or call arbitrary MCP tools. The
-`setup` command is the explicit exception: it installs the requested Codex MCP
-entry, and `setup codex --enable-command-guard` also opts into feedback-only hook
-configuration. Profiling launches configured stdio servers only when the user
-explicitly runs `profile`, `validate <server>`, or the equivalent MCP diagnostic
-tool. Child processes are killed after profiling.
+reset state, print configured MCP env/header secret values, or call arbitrary MCP
+tools. The `setup` command is the explicit exception: it installs the requested
+Codex MCP entry, and `setup codex --enable-command-guard` also opts into
+feedback-only hook configuration.
 
-`safe_config_snippet` values use placeholders such as `${TOKEN_ENV_VAR}` or `<absolute path>` and never echo discovered secret values.
+Profiling launches configured stdio servers only when the user explicitly runs
+`profile`, `validate <server>`, or the equivalent MCP diagnostic tool. Child
+processes are killed after profiling.
+
+`safe_config_snippet` values use placeholders such as `${TOKEN_ENV_VAR}` or
+`<absolute path>` and never echo discovered secret values.
 
 ## Advanced developer plugin testing
 
@@ -208,6 +214,9 @@ feedback-only hook cannot stall tool execution. If the hook environment cannot
 resolve `cdxcore`, replace the command with an absolute executable path. On
 Windows, quote paths with spaces in the hook command itself.
 
+Depending on Codex's current hook trust settings, Codex may ask you to review or
+trust the installed hook before it runs.
+
 ## Developer local build/testing
 
 Developer builds are for CDXCore contributors and local validation only:
@@ -228,6 +237,9 @@ When `cdxcore serve` is launched by Codex, `client_path` is authoritative for th
 
 ## Secrets
 
-Secret redaction applies to args, env literals, headers, OAuth fields, stderr/stdout evidence, safe snippets, and parsed JSON/TOML values under secret-like keys. CDXCore redacts keys or arguments containing:
+Secret redaction applies to args, env literals, headers, OAuth fields,
+stderr/stdout evidence, safe snippets, and parsed JSON/TOML values under
+secret-like keys. CDXCore redacts secret-like keys, header names, env names, and
+argument names/flags containing:
 
 `token`, `key`, `secret`, `password`, `bearer`, `auth`, `credential`, `cookie`, `session`, `api`, `oauth`.
