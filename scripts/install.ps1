@@ -5,6 +5,7 @@ param(
     [string]$InstallDir = "",
     [switch]$SkipCodexSetup,
     [switch]$EnableCommandGuard,
+    [switch]$EnableRetryLedger,
     [switch]$NoPathUpdate
 )
 
@@ -113,7 +114,19 @@ try {
     }
     $schemaSource = Join-Path $extractDir "schemas"
     if (Test-Path -LiteralPath $schemaSource) {
+        $schemaDestination = Join-Path $InstallDir "schemas"
+        if (Test-Path -LiteralPath $schemaDestination) {
+            Remove-Item -LiteralPath $schemaDestination -Recurse -Force
+        }
         Copy-Item -LiteralPath $schemaSource -Destination $InstallDir -Recurse -Force
+    }
+    $docsSource = Join-Path $extractDir "docs"
+    if (Test-Path -LiteralPath $docsSource) {
+        $docsDestination = Join-Path $InstallDir "docs"
+        if (Test-Path -LiteralPath $docsDestination) {
+            Remove-Item -LiteralPath $docsDestination -Recurse -Force
+        }
+        Copy-Item -LiteralPath $docsSource -Destination $InstallDir -Recurse -Force
     }
 
     if (-not $NoPathUpdate) {
@@ -127,8 +140,11 @@ try {
 
     if (-not $SkipCodexSetup) {
         $setupArgs = @("setup", "codex")
-        if ($EnableCommandGuard) {
+        if ($EnableCommandGuard -or $EnableRetryLedger) {
             $setupArgs += "--enable-command-guard"
+        }
+        if ($EnableRetryLedger) {
+            $setupArgs += "--enable-retry-ledger"
         }
         & $exe @setupArgs
         if ($LASTEXITCODE -ne 0) {

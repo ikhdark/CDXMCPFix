@@ -43,12 +43,43 @@ fn setup_codex_help_mentions_mcp_default_and_guard_opt_in() {
 
     assert!(stdout.contains("cdxcore serve"));
     assert!(stdout.contains("--enable-command-guard"));
+    assert!(stdout.contains("--enable-retry-ledger"));
     assert!(stdout.contains("Default setup installs only the CDXCore MCP server"));
     assert!(stdout.contains("feedback-only PreToolUse command guard hook"));
 }
 
 #[test]
 fn setup_codex_enable_command_guard_writes_isolated_pre_tool_use_hook() {
+    let (command, pre_hook) = run_setup_codex(&["setup", "codex", "--enable-command-guard"]);
+    assert!(command.status.success());
+    assert_eq!(
+        pre_hook.get("command").and_then(JsonValue::as_str),
+        Some("cdxcore guard-hook pre-tool-use")
+    );
+    assert_eq!(pre_hook.get("timeout").and_then(JsonValue::as_u64), Some(3));
+    assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("hooks")
+        .join("hooks.json")
+        .exists());
+}
+
+#[test]
+fn setup_codex_enable_retry_ledger_writes_pre_tool_use_ledger_hook() {
+    let (command, pre_hook) = run_setup_codex(&[
+        "setup",
+        "codex",
+        "--enable-command-guard",
+        "--enable-retry-ledger",
+    ]);
+    assert!(command.status.success());
+    assert_eq!(
+        pre_hook.get("command").and_then(JsonValue::as_str),
+        Some("cdxcore guard-hook pre-tool-use --ledger")
+    );
+    assert_eq!(pre_hook.get("timeout").and_then(JsonValue::as_u64), Some(3));
+}
+
+fn run_setup_codex(args: &[&str]) -> (std::process::Output, JsonValue) {
     let fake_bin = tempdir().unwrap();
     let codex_home = tempdir().unwrap();
     write_fake_codex(fake_bin.path());
@@ -59,7 +90,7 @@ fn setup_codex_enable_command_guard_writes_isolated_pre_tool_use_hook() {
     }
     let joined_path = env::join_paths(paths).unwrap();
 
-    let output = cdxcore_command(&["setup", "codex", "--enable-command-guard"])
+    let output = cdxcore_command(args)
         .env("CODEX_HOME", codex_home.path())
         .env("PATH", joined_path)
         .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
@@ -85,16 +116,9 @@ fn setup_codex_enable_command_guard_writes_isolated_pre_tool_use_hook() {
         .and_then(|group| group.get("hooks"))
         .and_then(JsonValue::as_array)
         .and_then(|handlers| handlers.first())
-        .unwrap();
-    assert_eq!(
-        pre_hook.get("command").and_then(JsonValue::as_str),
-        Some("cdxcore guard-hook pre-tool-use")
-    );
-    assert_eq!(pre_hook.get("timeout").and_then(JsonValue::as_u64), Some(3));
-    assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("hooks")
-        .join("hooks.json")
-        .exists());
+        .unwrap()
+        .clone();
+    (output, pre_hook)
 }
 
 #[cfg(windows)]

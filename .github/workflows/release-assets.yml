@@ -43,6 +43,18 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Add Rust validation components
+        run: rustup component add rustfmt clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
@@ -66,6 +78,10 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$stage/${{ matrix.installed_bin }}"
           cp README.md LICENSE "$stage/"
           cp -R schemas "$stage/schemas"
+          cp -R docs "$stage/docs"
+          cp .mcp.json "$stage/.mcp.json"
+          mkdir -p "$stage/.codex-plugin"
+          cp .codex-plugin/plugin.json "$stage/.codex-plugin/plugin.json"
           tar -czf "$GITHUB_WORKSPACE/$asset_base.tar.gz" -C "$stage" .
 
       - name: Package Windows archive
@@ -79,6 +95,10 @@ jobs:
           Copy-Item -LiteralPath README.md -Destination (Join-Path $stage README.md) -Force
           Copy-Item -LiteralPath LICENSE -Destination (Join-Path $stage LICENSE) -Force
           Copy-Item -LiteralPath schemas -Destination $stage -Recurse -Force
+          Copy-Item -LiteralPath docs -Destination $stage -Recurse -Force
+          Copy-Item -LiteralPath .mcp.json -Destination (Join-Path $stage .mcp.json) -Force
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage '.codex-plugin') | Out-Null
+          Copy-Item -LiteralPath .codex-plugin\plugin.json -Destination (Join-Path $stage '.codex-plugin\plugin.json') -Force
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "$assetBase.zip") -Force
 
       - uses: actions/upload-artifact@v4

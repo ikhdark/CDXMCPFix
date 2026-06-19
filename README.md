@@ -13,8 +13,8 @@ use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
 - Read-only Codex MCP config inspection and startup profiling.
 - Install the `cdxcore` CLI, then let Codex launch
   `cdxcore serve`.
-- Optional v2a command guard hooks are shipped but inactive by default; they are
-  feedback-only and never block or rewrite commands.
+- Optional command guard hooks are shipped but inactive by default. v2a is
+  stateless feedback-only; v2b adds an explicit opt-in retry-shape ledger.
 
 ## Quick Start
 
@@ -122,18 +122,23 @@ codex mcp add cdxcore -- cdxcore serve
 If the Codex CLI is unavailable, use the manual fallback below.
 
 To opt into the feedback-only command guard during install, download the
-installer first and run it with `-EnableCommandGuard`:
+installer first and run it with `-EnableCommandGuard`. Add
+`-EnableRetryLedger` only if you also want the explicit v2b ledger:
 
 ```powershell
 $installer = "$env:TEMP\install-cdxcore.ps1"
 irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 -OutFile $installer
 powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableCommandGuard
+# or:
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableRetryLedger
 ```
 
 On macOS/Linux:
 
 ```sh
 curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-command-guard
+# or:
+curl -fsSL https://github.com/ikhdark/CDXCore/releases/latest/download/install.sh | sh -s -- --enable-retry-ledger
 ```
 
 ## Updating CDXCore
@@ -211,14 +216,18 @@ Optional command-guard hook entrypoints:
 ```powershell
 cdxcore setup codex --enable-command-guard
 cdxcore guard-hook pre-tool-use
+cdxcore guard-hook pre-tool-use --ledger
 cdxcore guard-hook post-tool-use
 ```
 
 These are not MCP tools and are not wired into the default plugin manifest.
 `setup codex --enable-command-guard` writes the requested Codex hook config as
-an explicit opt-in. The hook entrypoint commands themselves are feedback-only:
-they do not write files, execute submitted commands, block, or rewrite input.
-Hook stdout is contract-only: empty for no feedback or one
+an explicit opt-in. Default command guard behavior remains stateless v2a.
+`setup codex --enable-command-guard --enable-retry-ledger` installs the explicit
+v2b retry-shape ledger by adding `--ledger` to the PreToolUse hook command. The
+hook entrypoint commands themselves are feedback-only: they do not execute
+submitted commands, block, rewrite input, read `transcript_path`, or call MCP
+tools. Hook stdout is contract-only: empty for no feedback or one
 `hookSpecificOutput.additionalContext` JSON object. `--json` does not change
 hook output.
 
@@ -236,8 +245,14 @@ Exit codes:
 CDXCore diagnostic commands and MCP tools do not edit config files, delete state,
 reset state, print configured MCP env/header secret values, or call arbitrary MCP
 tools. The `setup` command is the explicit exception: it installs the requested
-Codex MCP entry, and `setup codex --enable-command-guard` also opts into
-feedback-only hook configuration.
+Codex MCP entry, and `setup codex --enable-command-guard` opts into hook
+configuration.
+
+Default command guard remains stateless v2a. If retry ledger support is
+explicitly enabled with `--ledger`, `CDXCORE_GUARD_LEDGER=on`, or
+`setup codex --enable-command-guard --enable-retry-ledger`, the hook may write
+hash-only observations under `$CODEX_HOME/cdxcore` or `~/.codex/cdxcore`. Hook
+entrypoints never write Codex config; only setup does.
 
 Profiling launches configured stdio servers only when the user explicitly runs
 `profile`, `validate <server>`, or the equivalent MCP diagnostic tool. Child
@@ -272,18 +287,39 @@ whose default MCP entry runs:
 
 If Codex cannot resolve `cdxcore` from its GUI/client PATH, use the absolute path to the binary in `.mcp.json`.
 
-## Optional v2a command guard
+## Optional v2 command guard
 
-The command guard is not active by default. To opt in, run:
+The command guard is not active by default. To opt into stateless v2a feedback,
+run:
 
 ```powershell
 cdxcore setup codex --enable-command-guard
 ```
 
+To opt into v2b repeated risky shape feedback, run:
+
+```powershell
+cdxcore setup codex --enable-command-guard --enable-retry-ledger
+```
+
 That command writes `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` and
-installs only the PreToolUse guard hook. The `post-tool-use` entrypoint is kept
-for future success-path rules and custom manual configs, but v2a does not install
-it by default.
+installs only the PreToolUse guard hook. v2a installs `cdxcore guard-hook
+pre-tool-use`; v2b installs `cdxcore guard-hook pre-tool-use --ledger`. The
+`post-tool-use` entrypoint is kept for future success-path rules and custom
+manual configs, but setup does not install it by default.
+
+The v2b ledger files are:
+
+- `$CODEX_HOME/cdxcore/guard-ledger-v1.jsonl`
+- `$CODEX_HOME/cdxcore/guard-ledger-key`
+- `$CODEX_HOME/cdxcore/guard-ledger.lock`
+
+If `CODEX_HOME` is not set, CDXCore uses `~/.codex/cdxcore`. The ledger stores
+only keyed hashes of repeated risky command shapes, not raw commands or cwd
+values. Entries older than 24 hours are ignored, lines over 8 KiB are ignored,
+and compaction is best-effort after 256 KiB. A stale `guard-ledger.lock` can be
+deleted safely. Set `CDXCORE_GUARD_LEDGER=off` to force v2a behavior, or
+`CDXCORE_GUARD_LEDGER=on` to enable the ledger for a hook command.
 
 The standalone hook example lives at
 `docs/examples/codex-command-guard-hooks.json`. Keep an explicit low timeout so a

@@ -2,8 +2,9 @@
 
 One-screen index of CDXCore's planned scope. CDXCore is CLI-first,
 Codex-setup assisted, MCP-backed. **v1** is the default product surface.
-**v2a** is an optional, feedback-only hook module. v2b, v2c, and v3 are
-deferred design notes, not implementation.
+**v2a** is an optional, feedback-only hook module. **v2b** is an explicit
+opt-in repeated risky shape ledger. v2c and v3 are deferred design notes, not
+implementation.
 
 ## v1 — Read-only Codex MCP config/startup profiler
 
@@ -19,10 +20,17 @@ by default and must be explicitly enabled with
 blocking, input rewrite, or retry ledger. See
 [v2-command-guard.md](v2-command-guard.md).
 
-## v2b/v2c — Command-Guard escalation (deferred)
+## v2b — Repeated risky shape ledger (explicit opt-in)
 
-v2b retry-ledger behavior and v2c blocking behavior are deferred and must remain
-manual opt-in if implemented later.
+v2b keeps the feedback-only boundary but can write a privacy-safe, hash-only
+ledger when explicitly enabled with
+`cdxcore setup codex --enable-command-guard --enable-retry-ledger`,
+`cdxcore guard-hook pre-tool-use --ledger`, or `CDXCORE_GUARD_LEDGER=on`.
+
+## v2c — Command-Guard blocking (deferred)
+
+v2c blocking behavior is deferred and must remain manual opt-in if implemented
+later.
 
 ## v3 — Cross-client fleet view (deferred)
 

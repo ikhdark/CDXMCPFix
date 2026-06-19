@@ -5,6 +5,7 @@ VERSION="${CDXCORE_VERSION:-v0.1.3}"
 INSTALL_DIR="${CDXCORE_INSTALL_DIR:-}"
 SKIP_CODEX_SETUP="${CDXCORE_SKIP_CODEX_SETUP:-0}"
 ENABLE_COMMAND_GUARD="${CDXCORE_ENABLE_COMMAND_GUARD:-0}"
+ENABLE_RETRY_LEDGER="${CDXCORE_ENABLE_RETRY_LEDGER:-0}"
 NO_PATH_UPDATE="${CDXCORE_NO_PATH_UPDATE:-0}"
 
 while [ "$#" -gt 0 ]; do
@@ -25,6 +26,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --enable-command-guard)
             ENABLE_COMMAND_GUARD=1
+            shift
+            ;;
+        --enable-retry-ledger)
+            ENABLE_RETRY_LEDGER=1
             shift
             ;;
         --no-path-update)
@@ -105,8 +110,13 @@ sha256_file() {
     fi
 }
 
+shell_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 path_line_for_profile() {
-    printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    quoted_install_dir="$(shell_quote "$INSTALL_DIR")"
+    printf 'export PATH=%s:"$PATH"\n' "$quoted_install_dir"
 }
 
 add_path_to_profile() {
@@ -160,6 +170,10 @@ if [ -d "$extract_dir/schemas" ]; then
     rm -rf "$INSTALL_DIR/schemas"
     cp -R "$extract_dir/schemas" "$INSTALL_DIR/schemas"
 fi
+if [ -d "$extract_dir/docs" ]; then
+    rm -rf "$INSTALL_DIR/docs"
+    cp -R "$extract_dir/docs" "$INSTALL_DIR/docs"
+fi
 
 add_path_to_profile
 case ":$PATH:" in
@@ -170,8 +184,12 @@ esac
 "$INSTALL_DIR/cdxcore" --version
 
 if [ "$SKIP_CODEX_SETUP" != "1" ]; then
-    if [ "$ENABLE_COMMAND_GUARD" = "1" ]; then
-        if ! "$INSTALL_DIR/cdxcore" setup codex --enable-command-guard; then
+    if [ "$ENABLE_COMMAND_GUARD" = "1" ] || [ "$ENABLE_RETRY_LEDGER" = "1" ]; then
+        setup_args="--enable-command-guard"
+        if [ "$ENABLE_RETRY_LEDGER" = "1" ]; then
+            setup_args="$setup_args --enable-retry-ledger"
+        fi
+        if ! "$INSTALL_DIR/cdxcore" setup codex $setup_args; then
             echo "Warning: CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH." >&2
         fi
     else

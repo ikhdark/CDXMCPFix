@@ -43,8 +43,8 @@ aggregate the results.
 ## Trust model
 
 v3 **remains read-only**, the same trust proposition as v1. It crosses no state
-or control line. (Contrast with v2, which is where writable state and command
-blocking are introduced — see below.)
+or control line. (Contrast with v2, where v2b introduces an explicit opt-in
+writable retry-shape ledger and v2c blocking remains deferred — see below.)
 
 ## Command surface and the static-vs-profile distinction
 
