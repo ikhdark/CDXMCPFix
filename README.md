@@ -151,7 +151,9 @@ cdxcore guard-hook post-tool-use
 ```
 
 These are not MCP tools and are not wired into the default plugin manifest.
-They are feedback-only Codex hook commands for users who manually opt in.
+`setup codex --enable-command-guard` writes the requested Codex hook config as
+an explicit opt-in. The hook entrypoint commands themselves are feedback-only:
+they do not write files, execute submitted commands, block, or rewrite input.
 Hook stdout is contract-only: empty for no feedback or one
 `hookSpecificOutput.additionalContext` JSON object. `--json` does not change
 hook output.
@@ -202,11 +204,16 @@ If Codex cannot resolve `cdxcore` from its GUI/client PATH, use the absolute pat
 
 ## Optional v2a command guard
 
-The command guard is not active by default. To opt in:
+The command guard is not active by default. To opt in, run:
 
 ```powershell
 cdxcore setup codex --enable-command-guard
 ```
+
+That command writes `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` and
+installs only the PreToolUse guard hook. The `post-tool-use` entrypoint is kept
+for future success-path rules and custom manual configs, but v2a does not install
+it by default.
 
 The standalone hook example lives at
 `docs/examples/codex-command-guard-hooks.json`. Keep an explicit low timeout so a

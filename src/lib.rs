@@ -39,7 +39,7 @@ const SECRET_TERMS: &[&str] = &[
     name = "cdxcore",
     version,
     about = "Read-only MCP diagnostics for Codex",
-    after_help = "Optional command guard: available with `cdxcore setup codex --enable-command-guard`; inactive by default."
+    after_help = "Optional command guard: install with `cdxcore setup codex --enable-command-guard`; inactive by default."
 )]
 pub struct Cli {
     #[arg(
@@ -80,12 +80,12 @@ pub enum CliCommand {
 pub enum SetupCommand {
     #[command(
         about = "Configure Codex to launch `cdxcore serve`",
-        after_help = "Default setup installs only the CDXCore MCP server. Add `--enable-command-guard` to opt into feedback-only command guard hooks."
+        after_help = "Default setup installs only the CDXCore MCP server. Add `--enable-command-guard` to opt into the feedback-only PreToolUse command guard hook."
     )]
     Codex {
         #[arg(
             long,
-            help = "Opt into feedback-only Codex command guard hooks after installing the MCP server"
+            help = "Opt into the feedback-only PreToolUse command guard hook after installing the MCP server"
         )]
         enable_command_guard: bool,
     },
@@ -95,7 +95,7 @@ pub enum SetupCommand {
 pub enum GuardHookCommand {
     #[command(about = "Run the optional feedback-only PreToolUse command guard")]
     PreToolUse,
-    #[command(about = "Run the optional feedback-only PostToolUse command guard")]
+    #[command(about = "Run the reserved feedback-only PostToolUse command guard")]
     PostToolUse,
 }
 
@@ -350,12 +350,12 @@ async fn run_setup_codex(enable_command_guard: bool) -> Result<i32> {
         let changed = install_command_guard_hooks(&hooks_path)?;
         if changed {
             println!(
-                "Enabled optional CDXCore command guard hooks at {}.",
+                "Enabled optional CDXCore PreToolUse command guard hook at {}.",
                 display_path(&hooks_path)
             );
         } else {
             println!(
-                "Optional CDXCore command guard hooks were already present at {}.",
+                "Optional CDXCore PreToolUse command guard hook was already present at {}.",
                 display_path(&hooks_path)
             );
         }
@@ -449,12 +449,6 @@ fn install_command_guard_hooks(path: &Path) -> Result<bool> {
         hooks,
         "PreToolUse",
         "cdxcore guard-hook pre-tool-use",
-        "CDXCore command guard",
-    )?;
-    changed |= ensure_command_guard_hook(
-        hooks,
-        "PostToolUse",
-        "cdxcore guard-hook post-tool-use",
         "CDXCore command guard",
     )?;
 
@@ -2948,15 +2942,7 @@ mod tests {
                 .unwrap(),
             "cdxcore guard-hook pre-tool-use"
         ));
-        assert!(hook_group_contains_command(
-            hooks
-                .get("PostToolUse")
-                .and_then(JsonValue::as_array)
-                .unwrap()
-                .first()
-                .unwrap(),
-            "cdxcore guard-hook post-tool-use"
-        ));
+        assert!(hooks.get("PostToolUse").is_none());
     }
 
     #[test]
@@ -3239,6 +3225,7 @@ mod tests {
         assert!(docs.contains("docs/examples/codex-command-guard-hooks.json"));
         assert!(readme.contains("docs/examples/codex-command-guard-hooks.json"));
         assert!(example.contains("\"timeout\": 3"));
+        assert!(!example.contains("PostToolUse"));
         assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("hooks")
             .join("hooks.json")

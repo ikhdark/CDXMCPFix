@@ -56,15 +56,15 @@ Forbidden v2a output fields are:
 - `systemMessage`
 - `updatedPermissions`
 
-v2a never:
+The hook entrypoint commands themselves never:
 
-- blocks tool execution
-- rewrites tool input
-- executes submitted commands
-- reads `transcript_path`
-- writes filesystem state
-- stores a retry ledger
-- calls MCP tools
+- block tool execution
+- rewrite tool input
+- execute submitted commands
+- read `transcript_path`
+- write filesystem state
+- store a retry ledger
+- call MCP tools
 
 The implementation only inspects canonical Bash hook payloads where
 `tool_name == "Bash"` and `tool_input.command` is a string.
@@ -98,6 +98,12 @@ root `hooks/hooks.json`. To opt in after installing the CLI:
 ```powershell
 cdxcore setup codex --enable-command-guard
 ```
+
+That setup command is the explicit mutating opt-in path: it writes
+`$CODEX_HOME/hooks.json` or `~/.codex/hooks.json`. It installs only the PreToolUse
+guard hook in v2a. The `post-tool-use` entrypoint remains available for future
+success-path rules and custom manual configs, but v2a does not install it by
+default because it currently emits no feedback.
 
 The standalone JSON example lives at
 `docs/examples/codex-command-guard-hooks.json`.

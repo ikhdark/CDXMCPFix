@@ -12,19 +12,6 @@
           }
         ]
       }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cdxcore guard-hook post-tool-use",
-            "timeout": 3,
-            "statusMessage": "CDXCore command guard"
-          }
-        ]
-      }
     ]
   }
 }
