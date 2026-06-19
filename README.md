@@ -1,7 +1,7 @@
 # CDXCore
 
-CDXCore is a CLI and MCP server for diagnosing Codex MCP startup and
-configuration problems.
+CDXCore is a CLI-first, Codex-setup assisted, MCP-backed diagnostic tool for
+Codex MCP startup and configuration problems.
 
 The v1 target is Codex MCP configuration. Claude Desktop, Cursor, Windsurf, and VS Code adapters are intentionally left for later.
 
@@ -13,7 +13,7 @@ use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
 - Read-only Codex MCP config inspection and startup profiling.
 - Install the `cdxcore` CLI, then let Codex launch
   `cdxcore serve`.
-- Optional v2a command guard hooks are visible but inactive by default; they are
+- Optional v2a command guard hooks are shipped but inactive by default; they are
   feedback-only and never block or rewrite commands.
 
 ## Quick Start
@@ -50,7 +50,7 @@ The only path requirement is that `cdxcore` must be available to the app that
 launches Codex. GUI-launched clients can have a different PATH than an
 interactive terminal.
 
-## Installing and Initialising CDXCore
+## Installing and Initializing CDXCore
 
 Install CDXCore with the one-command installer for your platform.
 
@@ -75,14 +75,17 @@ when needed, and runs `cdxcore setup codex`.
 
 Current prebuilt artifacts:
 
-- Windows x64: `cdxcore-v0.1.2-x86_64-pc-windows-msvc.zip`
-- Linux x64: `cdxcore-v0.1.2-x86_64-unknown-linux-gnu.tar.gz`
-- macOS Intel: `cdxcore-v0.1.2-x86_64-apple-darwin.tar.gz`
-- macOS Apple Silicon: `cdxcore-v0.1.2-aarch64-apple-darwin.tar.gz`
+- Windows x64: `cdxcore-v0.1.3-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxcore-v0.1.3-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Apple Silicon: `cdxcore-v0.1.3-aarch64-apple-darwin.tar.gz`
 - Installers: `install.ps1`, `install.sh`
 
 Manual archive install remains available from
-`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.2`.
+`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.3`.
+
+For manual installs, download the Windows ZIP or macOS/Linux tarball from the
+release page and verify its SHA256 checksum against `SHA256SUMS.txt` before
+extracting it. CDXCore does not sign binaries yet.
 
 Upon completion, the command `cdxcore` should be available:
 
@@ -90,7 +93,7 @@ Upon completion, the command `cdxcore` should be available:
 cdxcore --version
 ```
 
-To initialise CDXCore for Codex, run:
+To initialize CDXCore for Codex, run:
 
 ```powershell
 cdxcore setup codex
@@ -173,6 +176,12 @@ command = "C:\\Users\\kuh\\Desktop\\CDXCore\\target\\release\\cdxcore.exe"
 args = ["serve"]
 ```
 
+## Troubleshooting PATH
+
+If `cdxcore --version` works in your terminal but Codex cannot start the MCP
+server, Codex may be running with a different GUI PATH. Use an absolute path in
+the MCP config.
+
 ## Commands
 
 ```powershell
@@ -186,6 +195,16 @@ cdxcore serve
 ```
 
 Add `--json` for the stable `cdxcore.diagnostics.v1` JSON schema. The schema is committed at `schemas/cdxcore.diagnostics.v1.schema.json`.
+
+## MCP tools
+
+`cdxcore serve` exposes these MCP tools:
+
+- `inspect_mcp_config`
+- `profile_mcp_startup`
+- `validate_mcp_server`
+- `diagnose_runtime`
+- `suggest_config_fixes`
 
 Optional command-guard hook entrypoints:
 
@@ -226,6 +245,12 @@ processes are killed after profiling.
 
 `safe_config_snippet` values use placeholders such as `${TOKEN_ENV_VAR}` or
 `<absolute path>` and never echo discovered secret values.
+
+## What CDXCore does not do
+
+CDXCore v1 does not edit your existing MCP server configs, call arbitrary MCP
+tools, profile HTTP servers, repair Codex state, or install hooks unless you
+explicitly run the hook setup command.
 
 ## Advanced developer plugin testing
 

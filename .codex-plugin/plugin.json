@@ -1,6 +1,6 @@
 {
   "name": "cdxcore",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Read-only MCP startup and configuration diagnostics for Codex.",
   "author": {
     "name": "CDXCore"

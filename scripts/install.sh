@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${CDXCORE_VERSION:-v0.1.2}"
+VERSION="${CDXCORE_VERSION:-v0.1.3}"
 INSTALL_DIR="${CDXCORE_INSTALL_DIR:-}"
 SKIP_CODEX_SETUP="${CDXCORE_SKIP_CODEX_SETUP:-0}"
 ENABLE_COMMAND_GUARD="${CDXCORE_ENABLE_COMMAND_GUARD:-0}"
@@ -52,11 +52,12 @@ case "$os:$arch" in
     Linux:x86_64|Linux:amd64)
         target="x86_64-unknown-linux-gnu"
         ;;
-    Darwin:x86_64|Darwin:amd64)
-        target="x86_64-apple-darwin"
-        ;;
     Darwin:arm64|Darwin:aarch64)
         target="aarch64-apple-darwin"
+        ;;
+    Darwin:x86_64|Darwin:amd64)
+        echo "macOS Intel is not published for this CDXCore release." >&2
+        exit 2
         ;;
     *)
         echo "unsupported platform: $os $arch" >&2

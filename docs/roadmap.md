@@ -1,7 +1,8 @@
 # CDXCore Roadmap (Index)
 
-One-screen index of CDXCore's planned scope. **v1** is the default product
-surface. **v2a** is an optional, feedback-only hook module. v2b, v2c, and v3 are
+One-screen index of CDXCore's planned scope. CDXCore is CLI-first,
+Codex-setup assisted, MCP-backed. **v1** is the default product surface.
+**v2a** is an optional, feedback-only hook module. v2b, v2c, and v3 are
 deferred design notes, not implementation.
 
 ## v1 — Read-only Codex MCP config/startup profiler
@@ -12,7 +13,7 @@ startup/handshake on explicit command. **This is the default MVP surface.**
 
 ## v2a — Command-Guard (optional, feedback-only)
 
-Hook-first command guard for AI-agent shell commands. v2a is visible but inactive
+Hook-first command guard for AI-agent shell commands. v2a is shipped but inactive
 by default and must be explicitly enabled with
 `cdxcore setup codex --enable-command-guard`. It emits feedback only: no command
 blocking, input rewrite, or retry ledger. See
