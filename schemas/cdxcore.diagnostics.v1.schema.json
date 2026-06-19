@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ikhdark/CDXCore/schemas/cdxcore.diagnostics.v1.schema.json",
+  "title": "CDXCore Diagnostics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "config_error_blocks_enumeration",
+    "incomplete_effective_surface",
+    "notices",
+    "servers"
+  ],
+  "properties": {
+    "schema_version": { "const": "cdxcore.diagnostics.v1" },
+    "status": { "$ref": "#/$defs/status" },
+    "config_error_blocks_enumeration": { "type": "boolean" },
+    "incomplete_effective_surface": { "type": "boolean" },
+    "notices": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "servers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/serverReport" }
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "warn", "fail"]
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process_spawn_ms",
+        "first_stdout_ms",
+        "first_stderr_ms",
+        "initialize_ms",
+        "tools_list_ms",
+        "total_profile_ms",
+        "timeout_stage"
+      ],
+      "properties": {
+        "process_spawn_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "first_stdout_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "first_stderr_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "initialize_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "tools_list_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "total_profile_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "timeout_stage": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "serverReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "config_source",
+        "source_kind",
+        "command",
+        "args_redacted",
+        "cwd",
+        "env_keys_only",
+        "timings",
+        "evidence",
+        "probable_cause",
+        "suggested_fix",
+        "safe_config_snippet",
+        "risk",
+        "managed",
+        "effective",
+        "overwritten_by",
+        "fingerprint"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "config_source": { "type": "string" },
+        "source_kind": { "type": "string" },
+        "command": { "$ref": "#/$defs/nullableString" },
+        "args_redacted": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cwd": { "$ref": "#/$defs/nullableString" },
+        "env_keys_only": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "timings": { "$ref": "#/$defs/timings" },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "probable_cause": { "$ref": "#/$defs/nullableString" },
+        "suggested_fix": { "$ref": "#/$defs/nullableString" },
+        "safe_config_snippet": { "$ref": "#/$defs/nullableString" },
+        "risk": { "$ref": "#/$defs/nullableString" },
+        "managed": { "type": "boolean" },
+        "effective": { "type": "boolean" },
+        "overwritten_by": { "$ref": "#/$defs/nullableString" },
+        "fingerprint": { "type": "string" }
+      }
+    }
+  }
+}

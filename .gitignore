@@ -1,5 +1,33 @@
 # Local dependencies
 node_modules/
+target/
+.venv/
+
+# Build and release artifacts
+dist/
+build/
+*.tgz
+
+# Logs and local env files
+*.log
+.env*
+!.env.example
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Tool caches and bytecode
+.cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+rtk/
+Cargo.toml.orig
 
 # Local Codex agent skill cache; publish only explicit repo docs/manifests.
 .agents/

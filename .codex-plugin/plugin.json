@@ -1,0 +1,22 @@
+{
+  "name": "cdxcore",
+  "version": "0.1.0",
+  "description": "Read-only MCP startup and configuration diagnostics for Codex.",
+  "author": {
+    "name": "CDXCore"
+  },
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "CDXCore",
+    "shortDescription": "Diagnose MCP startup and config problems without editing files.",
+    "longDescription": "CDXCore inspects Codex MCP configuration and profiles configured stdio MCP server startup with bounded, read-only diagnostics.",
+    "developerName": "CDXCore",
+    "category": "Developer Tools",
+    "capabilities": [
+      "MCP diagnostics",
+      "Codex config inspection",
+      "Read-only startup profiling"
+    ],
+    "defaultPrompt": "Diagnose my Codex MCP configuration with CDXCore."
+  }
+}

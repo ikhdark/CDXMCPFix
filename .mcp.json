@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cdxcore": {
+      "command": "cdxcore",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}
