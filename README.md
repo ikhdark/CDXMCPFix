@@ -18,22 +18,20 @@ use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
 
 ## Quick Start
 
-1. Install the prebuilt `cdxcore` CLI from the current release. The first
-   public artifact is `cdxcore-v0.1.0-x86_64-pc-windows-msvc.zip` for Windows
-   x64.
+1. Install and configure CDXCore for Codex with the Windows x64 one-command
+   installer:
+
+   ```powershell
+   irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 | iex
+   ```
+
 2. Verify that the command is available:
 
    ```powershell
    cdxcore --version
    ```
 
-3. Configure Codex:
-
-   ```powershell
-   cdxcore setup codex
-   ```
-
-4. Start a new Codex session. Codex launches `cdxcore serve` as the MCP server.
+3. Start a new Codex session. Codex launches `cdxcore serve` as the MCP server.
 
 ## Prerequisites
 
@@ -46,16 +44,23 @@ interactive terminal.
 
 ## Installing and Initialising CDXCore
 
-Install a prebuilt `cdxcore` CLI for your platform from the package or release
-channel published for the current CDXCore release.
+Install CDXCore with the one-command Windows x64 installer:
+
+```powershell
+irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 | iex
+```
+
+The installer downloads the current release ZIP, verifies `SHA256SUMS.txt`,
+installs `cdxcore.exe` to `%LOCALAPPDATA%\CDXCore\bin`, updates the user PATH,
+and runs `cdxcore setup codex`.
 
 Current prebuilt artifact:
 
-- Windows x64: `cdxcore-v0.1.0-x86_64-pc-windows-msvc.zip`
+- Windows x64: `cdxcore-v0.1.1-x86_64-pc-windows-msvc.zip`
+- Installer: `install.ps1`
 
-Download the ZIP from
-`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.0`, extract it, and put
-the extracted directory on the PATH used by Codex.
+Manual ZIP install remains available from
+`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.1`.
 
 Upon completion, the command `cdxcore` should be available:
 
@@ -68,6 +73,9 @@ To initialise CDXCore for Codex, run:
 ```powershell
 cdxcore setup codex
 ```
+
+The installer runs this setup command automatically unless invoked with
+`-SkipCodexSetup`.
 
 This configures Codex to launch:
 
@@ -87,6 +95,15 @@ codex mcp add cdxcore -- cdxcore serve
 ```
 
 If the Codex CLI is unavailable, use the manual fallback below.
+
+To opt into the feedback-only command guard during install, download the
+installer first and run it with `-EnableCommandGuard`:
+
+```powershell
+$installer = "$env:TEMP\install-cdxcore.ps1"
+irm https://github.com/ikhdark/CDXCore/releases/latest/download/install.ps1 -OutFile $installer
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -EnableCommandGuard
+```
 
 ## Updating CDXCore
 
